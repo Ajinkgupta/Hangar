@@ -110,7 +110,7 @@ function TerminalTabButton({ project, tab, active, closable }: { project: Projec
       onAuxClick={(e) => {
         if (e.button === 1 && closable) void closeTerminal(project.id, tab.id);
       }}
-      title="double-click to rename · middle-click to close"
+      title="double-click to rename · ⌘W or middle-click to close · ⌘⇧] next tab"
     >
       <span className={"tab-dot" + (busy ? " busy" : "")} />
       {tab.name}

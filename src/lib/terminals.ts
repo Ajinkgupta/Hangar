@@ -28,7 +28,7 @@ function makeTerminal(): Terminal {
     cursorBlink: true,
     fontSize: 13,
     fontFamily: "'SF Mono', Menlo, Monaco, 'Courier New', monospace",
-    scrollback: 20000,
+    scrollback: 8000,
     allowProposedApi: true,
     macOptionIsMeta: true,
     theme: {

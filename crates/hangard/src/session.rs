@@ -106,6 +106,14 @@ impl Session {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("HANGAR_SESSION", id);
+        // Never leak a parent Claude Code / agent session into the user's shells: it would
+        // make `claude` think it is a nested child session (transcripts off, etc.).
+        for (k, _) in std::env::vars() {
+            if k.starts_with("CLAUDE_CODE") || k == "CLAUDECODE" || k.starts_with("CURSOR_") || k == "TERM_PROGRAM" || k == "TERM_PROGRAM_VERSION" {
+                cmd.env_remove(&k);
+            }
+        }
+        cmd.env("TERM_PROGRAM", "Hangar");
         let mut child = pair.slave.spawn_command(cmd).context("spawn shell")?;
         drop(pair.slave);
         let pid = child.process_id().unwrap_or(0);
