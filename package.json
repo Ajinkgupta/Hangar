@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "install:app": "bash scripts/install.sh",
+    "dist": "bash scripts/install.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
