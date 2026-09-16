@@ -200,6 +200,11 @@ export const useStore = create<HangarState>((set, get) => ({
         }),
       };
     });
+    if (projectId === SSH_PROJECT_ID) {
+      set((s) => ({
+        config: { ...s.config, connectionRuns: Object.fromEntries(Object.entries(s.config.connectionRuns).filter(([, tid]) => tid !== terminalId)) },
+      }));
+    }
     terminals.destroy(sid);
     await pty.forget(sid).catch(() => {});
   },
@@ -365,7 +370,11 @@ export const useStore = create<HangarState>((set, get) => ({
   removeConnection: async (id) => {
     const c = get().config.connections.find((x) => x.id === id);
     for (const st of c?.steps ?? []) if (st.secretRef) await secrets.delete(st.secretRef).catch(() => {});
-    set((s) => ({ config: { ...s.config, connections: s.config.connections.filter((x) => x.id !== id) }, connectionEditor: null }));
+    set((s) => {
+      const connectionRuns = { ...s.config.connectionRuns };
+      delete connectionRuns[id];
+      return { config: { ...s.config, connections: s.config.connections.filter((x) => x.id !== id), connectionRuns }, connectionEditor: null };
+    });
   },
 
   runConnection: async (id) => {
@@ -386,16 +395,40 @@ export const useStore = create<HangarState>((set, get) => ({
       resolved.push({ ...st, resolved: value });
     }
     get().setActive(SSH_PROJECT_ID);
-    const terminalId = await get().addTerminal(SSH_PROJECT_ID, c.name);
-    if (!terminalId) return;
+    const ssh = get().config.projects.find((p) => p.id === SSH_PROJECT_ID);
+    const ownedId = get().config.connectionRuns[id];
+    const owned = ssh?.terminals.find((t) => t.id === ownedId);
+    let terminalId: string;
+    let freshShell = false;
+    if (owned) {
+      terminalId = owned.id;
+      const sid = sessionId(SSH_PROJECT_ID, terminalId);
+      get().updateLayout(SSH_PROJECT_ID, { activeTab: terminalId });
+      const alive = get().sessions[sid]?.alive !== false;
+      const connected = (get().monitor.activity[sid] ?? 0) > 0 || automation.isRunning(sid);
+      if (alive && connected) {
+        requestAnimationFrame(() => terminals.focus(sid));
+        return; // already connected: just show it
+      }
+      if (!alive) {
+        await get().restartSession(SSH_PROJECT_ID, terminalId);
+        freshShell = true;
+      }
+    } else {
+      terminalId = await get().addTerminal(SSH_PROJECT_ID, c.name);
+      if (!terminalId) return;
+      set((s) => ({ config: { ...s.config, connectionRuns: { ...s.config.connectionRuns, [id]: terminalId } } }));
+      freshShell = true;
+    }
     const sid = sessionId(SSH_PROJECT_ID, terminalId);
     set((s) => ({ connecting: { ...s.connecting, [sid]: "running" } }));
     automation.start(sid, resolved, {
       onDone: () => set((s) => ({ connecting: { ...s.connecting, [sid]: "done" } })),
     });
-    // Let the shell print its prompt before typing the command.
-    await new Promise((r) => setTimeout(r, 350));
+    // A fresh shell needs a moment to print its prompt before we type.
+    if (freshShell) await new Promise((r) => setTimeout(r, 350));
     pty.write(sid, b64encode(c.command + "\r")).catch((e) => get().setError(String(e)));
+    requestAnimationFrame(() => terminals.focus(sid));
   },
 
   addWorktree: async (projectId, branch) => {

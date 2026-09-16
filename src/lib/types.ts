@@ -34,6 +34,8 @@ export type Config = {
   projects: Project[];
   activeProjectId: string | null;
   connections: Connection[];
+  /** connection id -> the SSH terminal tab it runs in (connections own their tab) */
+  connectionRuns: Record<string, string>;
 };
 
 export function sshProject(): Project {
@@ -55,7 +57,7 @@ export const defaultLayout = (): ProjectLayout => ({
   portsOpen: true,
 });
 
-export const emptyConfig = (): Config => ({ version: 1, projects: [sshProject()], activeProjectId: null, connections: [] });
+export const emptyConfig = (): Config => ({ version: 1, projects: [sshProject()], activeProjectId: null, connections: [], connectionRuns: {} });
 
 export function basename(path: string): string {
   const parts = path.replace(/\/+$/, "").split("/");
@@ -114,6 +116,7 @@ export function normalizeConfig(raw: unknown): Config {
   const normalized: Config = {
     version: 1,
     connections,
+    connectionRuns: r.connectionRuns && typeof r.connectionRuns === "object" ? r.connectionRuns : {},
     projects: projects
       .filter((p): p is Project => !!p && typeof p === "object" && typeof (p as Project).path === "string")
       .map((p) => {
