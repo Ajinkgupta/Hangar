@@ -150,6 +150,15 @@ impl DaemonState {
         }
     }
 
+    /// Sends a request without waiting for a reply. Used for terminal input: it is
+    /// called from a sync command on the main thread, so keystrokes keep their order.
+    pub fn send_nowait(&self, cmd: Cmd) -> Result<(), String> {
+        let guard = self.conn.lock().unwrap();
+        let conn = guard.as_ref().ok_or("session daemon not connected")?;
+        let line = serde_json::to_string(&Request { req: None, cmd }).map_err(|e| e.to_string())?;
+        conn.tx.try_send(line).map_err(|_| "daemon connection busy".to_string())
+    }
+
     pub fn is_connected(&self) -> bool {
         self.conn.lock().unwrap().is_some()
     }
@@ -192,8 +201,8 @@ pub async fn pty_scrollback(state: State<'_, DaemonState>, id: String) -> Result
 }
 
 #[tauri::command]
-pub async fn pty_write(state: State<'_, DaemonState>, id: String, data: String) -> Result<(), String> {
-    state.request(Cmd::Write { id, data }).await.map(|_| ())
+pub fn pty_write(state: State<'_, DaemonState>, id: String, data: String) -> Result<(), String> {
+    state.send_nowait(Cmd::Write { id, data })
 }
 
 #[tauri::command]

@@ -13,7 +13,7 @@ export function TerminalPane({ project, tab, visible }: { project: Project; tab:
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    terminals.attach(id, host);
+    terminals.mount(id, host);
     let raf = 0;
     const refit = () => {
       cancelAnimationFrame(raf);
@@ -30,12 +30,13 @@ export function TerminalPane({ project, tab, visible }: { project: Project; tab:
   }, [id]);
 
   useEffect(() => {
-    if (visible) {
-      requestAnimationFrame(() => {
-        terminals.fit(id);
-        terminals.focus(id);
-      });
-    }
+    if (!visible) return;
+    const raf = requestAnimationFrame(() => {
+      terminals.open(id);
+      terminals.fit(id);
+      terminals.focus(id);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [visible, id]);
 
   const ended = session && !session.alive;

@@ -66,8 +66,8 @@ export const terminals = {
     return entries.get(id);
   },
 
-  /** Creates the terminal on first use and attaches its element to `host`. */
-  attach(id: string, host: HTMLElement): Entry {
+  /** Creates the entry on first use and puts its element into `host` (no rendering yet). */
+  mount(id: string, host: HTMLElement): Entry {
     let e = entries.get(id);
     if (!e) {
       const term = makeTerminal();
@@ -78,6 +78,9 @@ export const terminals = {
       entries.set(id, e);
       term.onData((data) => {
         pty.write(id, b64encode(data)).catch(() => {});
+      });
+      term.onBinary((data) => {
+        pty.write(id, btoa(data)).catch(() => {});
       });
       // Cmd+C copies the selection (like VS Code); everything else goes to the shell.
       term.attachCustomKeyEventHandler((ev) => {
@@ -91,29 +94,34 @@ export const terminals = {
         }
         return true;
       });
-      term.onBinary((data) => {
-        pty.write(id, btoa(data)).catch(() => {});
-      });
     }
     if (e.el.parentElement !== host) host.appendChild(e.el);
-    if (!e.opened) {
-      e.opened = true;
-      e.term.loadAddon(e.fit);
-      e.term.loadAddon(new WebLinksAddon());
-      const unicode = new Unicode11Addon();
-      e.term.loadAddon(unicode);
-      e.term.unicode.activeVersion = "11";
-      e.term.open(e.el);
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        e.term.loadAddon(webgl);
-      } catch {
-        /* fall back to the DOM renderer */
-      }
-      void loadScrollback(id, e);
-    }
     return e;
+  },
+
+  /**
+   * Renders the terminal. Must only be called while the element is visible:
+   * xterm measures the font and sizes its canvas at open time, so opening inside a
+   * display:none tab yields a blank terminal that never paints.
+   */
+  open(id: string) {
+    const e = entries.get(id);
+    if (!e || e.opened || !e.el.isConnected || e.el.offsetParent === null) return;
+    e.opened = true;
+    e.term.loadAddon(e.fit);
+    e.term.loadAddon(new WebLinksAddon());
+    const unicode = new Unicode11Addon();
+    e.term.loadAddon(unicode);
+    e.term.unicode.activeVersion = "11";
+    e.term.open(e.el);
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      e.term.loadAddon(webgl);
+    } catch {
+      /* fall back to the DOM renderer */
+    }
+    void loadScrollback(id, e);
   },
 
   detach(id: string) {
@@ -124,7 +132,7 @@ export const terminals = {
   /** Fits to the host and tells the PTY the new size if it changed. */
   fit(id: string) {
     const e = entries.get(id);
-    if (!e || !e.opened || !e.el.isConnected) return;
+    if (!e || !e.opened || !e.el.isConnected || e.el.offsetParent === null) return;
     try {
       e.fit.fit();
     } catch {

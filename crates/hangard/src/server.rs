@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use hangar_protocol::{Cmd, Event, Reply, ReplyBody, Request, PROTOCOL_VERSION};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -79,9 +80,14 @@ impl Daemon {
                 Ok(ReplyBody::Scrollback { id, data: b64(tail) })
             }
             Cmd::Write { id, data } => {
-                let s = self.sessions.lock().unwrap();
-                let sess = s.get(&id).context("no such session")?;
-                sess.write(&unb64(&data)?)?;
+                let writer = {
+                    let s = self.sessions.lock().unwrap();
+                    s.get(&id).context("no such session")?.writer()
+                };
+                let bytes = unb64(&data)?;
+                let mut w = writer.lock().unwrap();
+                w.write_all(&bytes)?;
+                w.flush()?;
                 Ok(ReplyBody::Ok)
             }
             Cmd::Resize { id, cols, rows } => {

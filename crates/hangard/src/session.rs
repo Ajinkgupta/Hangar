@@ -216,6 +216,10 @@ impl Session {
         self.shared.state.lock().unwrap().alive
     }
 
+    pub fn writer(&self) -> Arc<Mutex<Box<dyn Write + Send>>> {
+        self.writer.clone()
+    }
+
     pub fn write(&self, bytes: &[u8]) -> Result<()> {
         let mut w = self.writer.lock().unwrap();
         w.write_all(bytes)?;
