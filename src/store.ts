@@ -57,6 +57,8 @@ export interface HangarState {
   addTerminal: (projectId: string, name?: string) => Promise<string>;
   closeTerminal: (projectId: string, terminalId: string) => Promise<void>;
   renameTerminal: (projectId: string, terminalId: string, name: string) => void;
+  /** Run a saved command in its own tab; if it is still running there, just switch to it. */
+  runSavedCommand: (projectId: string, commandId: string, forceNewTab?: boolean) => Promise<void>;
 
   ensureSessions: (project: Project, live?: LiveSessions) => Promise<void>;
   ensureAllSessions: () => Promise<void>;
@@ -193,7 +195,8 @@ export const useStore = create<HangarState>((set, get) => ({
           const idx = p.terminals.findIndex((t) => t.id === terminalId);
           let activeTab = p.layout.activeTab;
           if (activeTab === terminalId) activeTab = terminals[Math.max(0, idx - 1)]?.id ?? CHANGES_TAB;
-          return { ...p, terminals, layout: { ...p.layout, activeTab } };
+          const commandRuns = Object.fromEntries(Object.entries(p.commandRuns).filter(([, tid]) => tid !== terminalId));
+          return { ...p, terminals, commandRuns, layout: { ...p.layout, activeTab } };
         }),
       };
     });
@@ -208,6 +211,38 @@ export const useStore = create<HangarState>((set, get) => ({
         terminals: p.terminals.map((t) => (t.id === terminalId ? { ...t, name: name.trim() || t.name } : t)),
       })),
     })),
+
+  runSavedCommand: async (projectId, commandId, forceNewTab = false) => {
+    const s = get();
+    const project = s.config.projects.find((p) => p.id === projectId);
+    const cmd = project?.commands.find((c) => c.id === commandId);
+    if (!project || !cmd) return;
+    const ownedId = project.commandRuns[commandId];
+    const owned = !forceNewTab ? project.terminals.find((t) => t.id === ownedId) : undefined;
+    if (owned) {
+      const sid = sessionId(projectId, owned.id);
+      s.updateLayout(projectId, { activeTab: owned.id });
+      const alive = s.sessions[sid]?.alive !== false;
+      const running = (s.monitor.activity[sid] ?? 0) > 0;
+      if (alive && running) {
+        requestAnimationFrame(() => terminals.focus(sid));
+        return; // still running: just show it
+      }
+      if (!alive) await s.restartSession(projectId, owned.id);
+      pty.write(sid, b64encode(cmd.command + "\r")).catch((e) => get().setError(String(e)));
+      requestAnimationFrame(() => terminals.focus(sid));
+      return;
+    }
+    const terminalId = await s.addTerminal(projectId, cmd.label);
+    if (!terminalId) return;
+    set((st) => ({
+      config: patchProject(st.config, projectId, (p) => ({ ...p, commandRuns: { ...p.commandRuns, [commandId]: terminalId } })),
+    }));
+    const sid = sessionId(projectId, terminalId);
+    await new Promise((r) => setTimeout(r, 300)); // let the shell print its prompt
+    pty.write(sid, b64encode(cmd.command + "\r")).catch((e) => get().setError(String(e)));
+    requestAnimationFrame(() => terminals.focus(sid));
+  },
 
   ensureSessions: async (project, live) => {
     if (!live) {

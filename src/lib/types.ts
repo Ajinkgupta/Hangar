@@ -24,6 +24,8 @@ export type Project = {
   kind?: "ssh";
   terminals: TerminalTab[];
   commands: SavedCommand[];
+  /** saved command id -> the terminal tab it last ran in (commands own their tab) */
+  commandRuns: Record<string, string>;
   layout: ProjectLayout;
 };
 
@@ -42,6 +44,7 @@ export function sshProject(): Project {
     kind: "ssh",
     terminals: [],
     commands: [],
+    commandRuns: {},
     layout: { ...defaultLayout(), portsOpen: false, activeTab: "" },
   };
 }
@@ -76,6 +79,7 @@ export function newProject(path: string): Project {
     path,
     terminals: [first],
     commands: defaultCommands(),
+    commandRuns: {},
     layout: { ...defaultLayout(), activeTab: first.id },
   };
 }
@@ -133,6 +137,7 @@ export function normalizeConfig(raw: unknown): Config {
           ...(kind ? { kind } : {}),
           terminals: kind ? (Array.isArray(p.terminals) ? p.terminals : []) : terminals,
           commands: Array.isArray(p.commands) ? p.commands : kind ? [] : defaultCommands(),
+          commandRuns: p.commandRuns && typeof p.commandRuns === "object" ? p.commandRuns : {},
           layout,
         };
       }),

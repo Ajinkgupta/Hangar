@@ -257,3 +257,6 @@ button.small { font-size: 11px; padding: 2px 8px; }
 .empty.small { padding: 24px; }
 .branch-chip { margin-left: 8px; font-weight: 500; font-size: 11px; font-family: var(--mono); color: var(--fg-muted); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; vertical-align: middle; }
 .project-meta .branch { overflow: hidden; text-overflow: ellipsis; }
+.cmd.running { border-color: rgba(74, 222, 128, 0.5); }
+.cmd.current { background: var(--bg-3); }
+.cmd .play.live { color: var(--green); animation: pulse 1.2s ease-in-out infinite; display: inline-block; }

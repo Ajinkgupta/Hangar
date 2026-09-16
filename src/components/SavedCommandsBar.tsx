@@ -1,30 +1,14 @@
 import { useState } from "react";
 import { useStore } from "../store";
-import { b64encode, pty } from "../lib/ipc";
-import { CHANGES_TAB, sessionId, uid, type Project, type SavedCommand } from "../lib/types";
-import { terminals } from "../lib/terminals";
+import { sessionId, uid, type Project, type SavedCommand } from "../lib/types";
 
-/** Row of one-click commands. Each sends its text into the active terminal tab. */
+/** Row of one-click commands. Each command owns a terminal tab: click runs it there, or
+ *  switches to it if it is still running. ⌥-click always opens a fresh tab. */
 export function SavedCommandsBar({ project }: { project: Project }) {
   const setCommands = useStore((s) => s.setCommands);
-  const updateLayout = useStore((s) => s.updateLayout);
-  const addTerminal = useStore((s) => s.addTerminal);
+  const run = useStore((s) => s.runSavedCommand);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<SavedCommand[]>(project.commands);
-
-  const run = async (command: string, inNewTab = false) => {
-    let terminalId = project.layout.activeTab;
-    if (inNewTab || terminalId === CHANGES_TAB || !project.terminals.some((t) => t.id === terminalId)) {
-      terminalId = inNewTab ? await addTerminal(project.id, command.split(" ")[0]) : project.terminals[0]?.id ?? "";
-      if (!terminalId) terminalId = await addTerminal(project.id);
-      updateLayout(project.id, { activeTab: terminalId });
-      // give the new PTY a moment to spawn its shell before typing into it
-      await new Promise((r) => setTimeout(r, inNewTab ? 250 : 0));
-    }
-    const sid = sessionId(project.id, terminalId);
-    pty.write(sid, b64encode(command + "\r")).catch((e) => useStore.getState().setError(String(e)));
-    requestAnimationFrame(() => terminals.focus(sid));
-  };
 
   const startEdit = () => {
     setDraft(project.commands.length ? project.commands : [{ id: uid(), label: "", command: "" }]);
@@ -43,14 +27,7 @@ export function SavedCommandsBar({ project }: { project: Project }) {
       <div className="commands">
         {project.commands.length === 0 && !editing && <span className="hint">No saved commands — add e.g. claude --resume, npm run dev, pytest…</span>}
         {project.commands.map((c) => (
-          <button
-            key={c.id}
-            className="cmd"
-            title={`${c.command}\nclick: run in current terminal · ⌥-click: run in a new terminal`}
-            onClick={(e) => void run(c.command, e.altKey)}
-          >
-            <span className="play">▶</span> {c.label}
-          </button>
+          <CommandButton key={c.id} project={project} command={c} onRun={(force) => void run(project.id, c.id, force)} />
         ))}
       </div>
       <button className="ghost small" onClick={editing ? () => setEditing(false) : startEdit}>
@@ -65,11 +42,7 @@ export function SavedCommandsBar({ project }: { project: Project }) {
           </div>
           {draft.map((c, i) => (
             <div className="row" key={c.id}>
-              <input
-                placeholder="dev"
-                value={c.label}
-                onChange={(e) => setDraft(draft.map((d, j) => (j === i ? { ...d, label: e.target.value } : d)))}
-              />
+              <input placeholder="dev" value={c.label} onChange={(e) => setDraft(draft.map((d, j) => (j === i ? { ...d, label: e.target.value } : d)))} />
               <input
                 placeholder="npm run dev"
                 value={c.command}
@@ -95,5 +68,22 @@ export function SavedCommandsBar({ project }: { project: Project }) {
         </div>
       )}
     </div>
+  );
+}
+
+function CommandButton({ project, command, onRun }: { project: Project; command: SavedCommand; onRun: (forceNewTab: boolean) => void }) {
+  const ownedId = project.commandRuns[command.id];
+  const tab = project.terminals.find((t) => t.id === ownedId);
+  const sid = tab ? sessionId(project.id, tab.id) : null;
+  const running = useStore((s) => (sid ? (s.monitor.activity[sid] ?? 0) > 0 && s.sessions[sid]?.alive !== false : false));
+  const isActive = tab ? project.layout.activeTab === tab.id : false;
+  return (
+    <button
+      className={"cmd" + (running ? " running" : "") + (isActive ? " current" : "")}
+      title={`${command.command}\n${running ? "running — click to switch to its tab" : "click: run in its own tab"} · ⌥-click: run in a new tab`}
+      onClick={(e) => onRun(e.altKey)}
+    >
+      <span className={"play" + (running ? " live" : "")}>{running ? "●" : "▶"}</span> {command.label}
+    </button>
   );
 }
