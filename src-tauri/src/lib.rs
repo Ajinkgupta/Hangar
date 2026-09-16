@@ -6,6 +6,9 @@ pub mod git;
 pub mod monitor;
 
 use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 
 /// Opens an http(s) link in the user's default browser (terminal link clicks).
@@ -21,9 +24,89 @@ fn open_url(url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Opens a folder or file in the given editor app (e.g. "Cursor", "Visual Studio Code").
+#[tauri::command]
+fn open_in_editor(app_name: String, path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("{path} does not exist"));
+    }
+    std::process::Command::new("open")
+        .arg("-a")
+        .arg(&app_name)
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Editors found in /Applications, in preference order.
+#[tauri::command]
+fn detect_editors() -> Vec<String> {
+    ["Cursor", "Visual Studio Code", "Zed", "Windsurf", "Sublime Text"]
+        .iter()
+        .filter(|n| std::path::Path::new(&format!("/Applications/{n}.app")).exists())
+        .map(|n| n.to_string())
+        .collect()
+}
+
+/// macOS notification via osascript (no plugin, no permission prompt beyond the first).
+#[tauri::command]
+fn notify(title: String, body: String, sound: bool) -> Result<(), String> {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut script = format!("display notification \"{}\" with title \"Hangar\" subtitle \"{}\"", esc(&body), esc(&title));
+    if sound {
+        script.push_str(" sound name \"Glass\"");
+    }
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Menu-bar text: how many agents are waiting / running.
+#[tauri::command]
+fn tray_set_status(app: AppHandle, waiting: u32, running: u32) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let title = if waiting > 0 {
+            format!("● {waiting}")
+        } else if running > 0 {
+            format!("{running}")
+        } else {
+            String::new()
+        };
+        tray.set_title(Some(title)).map_err(|e| e.to_string())?;
+        tray.set_tooltip(Some(format!("Hangar — {waiting} waiting, {running} agents running"))).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn focus_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed && shortcut == &"cmd+shift+h".parse::<Shortcut>().unwrap() {
+                        match app.get_webview_window("main") {
+                            Some(w) if w.is_focused().unwrap_or(false) => {
+                                let _ = w.hide();
+                            }
+                            _ => focus_main(app),
+                        }
+                    }
+                })
+                .build(),
+        )
         .manage(daemon_client::DaemonState::default())
         .setup(|app| {
             // Custom menu: keeps the Edit items (needed for Cmd+C/V in the terminal) but
@@ -72,6 +155,20 @@ pub fn run() {
                 ],
             )?;
             app.set_menu(menu)?;
+            // Menu-bar item: shows how many agents need attention; click focuses Hangar.
+            let mut tray = TrayIconBuilder::with_id("main").tooltip("Hangar");
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon).icon_as_template(false);
+            }
+            tray.on_tray_icon_event(|tray, event| {
+                if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                    focus_main(tray.app_handle());
+                }
+            })
+            .build(app)?;
+            if let Err(e) = app.global_shortcut().register("cmd+shift+h".parse::<Shortcut>().unwrap()) {
+                eprintln!("global shortcut not registered: {e}");
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 daemon_client::start(handle).await;
@@ -82,6 +179,7 @@ pub fn run() {
             daemon_client::pty_list,
             daemon_client::pty_create,
             daemon_client::pty_scrollback,
+            daemon_client::pty_tail,
             daemon_client::pty_write,
             daemon_client::pty_resize,
             daemon_client::pty_kill,
@@ -92,9 +190,15 @@ pub fn run() {
             monitor::kill_process,
             git::git_status,
             git::git_diff,
+            git::git_summary,
+            git::git_worktree_add,
             config::config_load,
             config::config_save,
             open_url,
+            open_in_editor,
+            detect_editors,
+            notify,
+            tray_set_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hangar");

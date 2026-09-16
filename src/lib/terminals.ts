@@ -26,6 +26,9 @@ type Entry = {
 
 const entries = new Map<string, Entry>();
 
+/** Set by the app: called when the user types into a terminal. */
+export const terminalHooks: { onInput: (id: string) => void } = { onInput: () => {} };
+
 function makeTerminal(): Terminal {
   return new Terminal({
     cursorBlink: true,
@@ -103,6 +106,7 @@ export const terminals = {
       e = { term, fit, search, webgl: null, el, opened: false, ready: false, queue: [], lastSize: null };
       entries.set(id, e);
       term.onData((data) => {
+        terminalHooks.onInput(id);
         pty.write(id, b64encode(data)).catch(() => {});
       });
       term.onBinary((data) => {

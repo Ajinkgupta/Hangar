@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../store";
-import { git, type FileStatus, type GitStatus } from "../lib/ipc";
+import { git, openInEditor, type FileStatus, type GitStatus } from "../lib/ipc";
 import { parseUnifiedDiff } from "../lib/diff";
 import type { Project } from "../lib/types";
 import { DiffView } from "./DiffView";
@@ -9,7 +9,11 @@ const STATUS_LABEL: Record<string, string> = { M: "modified", A: "added", D: "de
 
 export function ChangesPane({ project }: { project: Project }) {
   const updateLayout = useStore((s) => s.updateLayout);
+  const editors = useStore((s) => s.editors);
   const view = project.layout.diffView;
+  const openFile = (f: FileStatus) => {
+    if (editors[0] && f.status !== "D") void openInEditor(editors[0], `${project.path}/${f.path}`);
+  };
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, string>>({});
@@ -76,7 +80,7 @@ export function ChangesPane({ project }: { project: Project }) {
         </div>
         <ul>
           {files.map((f) => (
-            <FileRow key={f.path} file={f} selected={f.path === selected} onClick={() => setSelected(f.path)} />
+            <FileRow key={f.path} file={f} selected={f.path === selected} onClick={() => setSelected(f.path)} onOpen={() => openFile(f)} />
           ))}
           {status && files.length === 0 && <li className="muted">Working tree clean.</li>}
         </ul>
@@ -94,6 +98,11 @@ export function ChangesPane({ project }: { project: Project }) {
               </span>
             )}
             <span className="spacer" />
+            {editors[0] && current.status !== "D" && (
+              <button className="ghost small" onClick={() => openFile(current)} title="Open this file in the editor">
+                open in {editors[0].replace("Visual Studio Code", "VS Code")}
+              </button>
+            )}
             <div className="seg">
               <button className={view === "unified" ? "on" : ""} onClick={() => updateLayout(project.id, { diffView: "unified" })}>Unified</button>
               <button className={view === "split" ? "on" : ""} onClick={() => updateLayout(project.id, { diffView: "split" })}>Split</button>
@@ -108,11 +117,16 @@ export function ChangesPane({ project }: { project: Project }) {
   );
 }
 
-function FileRow({ file, selected, onClick }: { file: FileStatus; selected: boolean; onClick: () => void }) {
+function FileRow({ file, selected, onClick, onOpen }: { file: FileStatus; selected: boolean; onClick: () => void; onOpen: () => void }) {
   const dir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
   const base = file.path.slice(dir.length);
   return (
-    <li className={"file-row" + (selected ? " selected" : "")} onClick={onClick} title={`${STATUS_LABEL[file.status] ?? file.status}${file.staged ? " (staged)" : ""}`}>
+    <li
+      className={"file-row" + (selected ? " selected" : "")}
+      onClick={onClick}
+      onDoubleClick={onOpen}
+      title={`${STATUS_LABEL[file.status] ?? file.status}${file.staged ? " (staged)" : ""} · double-click to open in editor`}
+    >
       <span className={"status-letter s-" + (file.status === "?" ? "U" : file.status)}>{file.status === "?" ? "U" : file.status}</span>
       <span className="file-name">
         <span className="dir">{dir}</span>

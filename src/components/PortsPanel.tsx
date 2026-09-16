@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../store";
-import { killProcess, type PortRow } from "../lib/ipc";
+import { killProcess, openUrl, type PortRow } from "../lib/ipc";
 import { projectOfSession, type Project } from "../lib/types";
 
 export function PortsPanel({ project }: { project: Project }) {
@@ -67,7 +67,12 @@ export function PortsPanel({ project }: { project: Project }) {
               const pending = pendingKill[r.pid] !== undefined && Date.now() - pendingKill[r.pid] < 5000;
               return (
                 <tr key={`${r.port}-${r.pid}`} className={(r.conflict ? "conflict " : "") + (isThisProject(r) ? "mine" : "")}>
-                  <td className="mono">{r.port}{r.conflict && <span className="conflict-tag" title="More than one process listens on this port">conflict</span>}</td>
+                  <td className="mono">
+                    <button className="link-port" title={`open http://localhost:${r.port}`} onClick={() => void openUrl(`http://localhost:${r.port}`)}>
+                      {r.port} ↗
+                    </button>
+                    {r.conflict && <span className="conflict-tag" title="More than one process listens on this port">conflict</span>}
+                  </td>
                   <td className="mono" title={r.addr}>{r.process}</td>
                   <td className="mono">{r.pid}</td>
                   <td>{nameOf(r.session_id) ?? <span className="muted">—</span>}</td>

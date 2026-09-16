@@ -45,19 +45,26 @@ export function TerminalPane({ project, tab, visible }: { project: Project; tab:
     };
   }, [id]);
 
+  const clearAttention = useStore((s) => s.clearAttention);
   useEffect(() => {
     if (!visible) {
       terminals.setVisible(id, false);
       return;
     }
+    if (document.hasFocus()) clearAttention(id);
+    const onFocus = () => clearAttention(id);
+    window.addEventListener("focus", onFocus);
     const raf = requestAnimationFrame(() => {
       terminals.open(id);
       terminals.setVisible(id, true);
       terminals.fit(id);
       terminals.focus(id);
     });
-    return () => cancelAnimationFrame(raf);
-  }, [visible, id]);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [visible, id, clearAttention]);
 
   const ended = session && !session.alive;
   return (

@@ -5,11 +5,14 @@ import { TerminalPane } from "./TerminalPane";
 import { SavedCommandsBar } from "./SavedCommandsBar";
 import { PortsPanel } from "./PortsPanel";
 import { ChangesPane } from "./ChangesPane";
+import { openInEditor } from "../lib/ipc";
 
 export function ProjectView({ project }: { project: Project }) {
   const updateLayout = useStore((s) => s.updateLayout);
   const stop = useStore((s) => s.stopSessions);
   const addTerminal = useStore((s) => s.addTerminal);
+  const editors = useStore((s) => s.editors);
+  const changed = useStore((s) => s.gitSummary[project.path]?.files ?? 0);
   const { layout } = project;
   const set = (patch: Parameters<typeof updateLayout>[1]) => updateLayout(project.id, patch);
 
@@ -53,10 +56,15 @@ export function ProjectView({ project }: { project: Project }) {
           </button>
           <span className="tab-gap" />
           <button className={layout.activeTab === CHANGES_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: CHANGES_TAB })}>
-            ⎇ changes
+            ⎇ changes{changed > 0 && <span className="count">{changed}</span>}
           </button>
         </nav>
         <div className="header-actions">
+          {editors[0] && (
+            <button onClick={() => void openInEditor(editors[0], project.path)} title={`Open this folder in ${editors[0]}`}>
+              open in {editors[0].replace("Visual Studio Code", "VS Code")}
+            </button>
+          )}
           <button className={layout.portsOpen ? "on" : ""} onClick={() => set({ portsOpen: !layout.portsOpen })} title="Toggle port monitor">
             ports
           </button>
@@ -75,8 +83,12 @@ function TerminalTabButton({ project, tab, active, closable }: { project: Projec
   const updateLayout = useStore((s) => s.updateLayout);
   const closeTerminal = useStore((s) => s.closeTerminal);
   const renameTerminal = useStore((s) => s.renameTerminal);
-  const session = useStore((s) => s.sessions[sessionId(project.id, tab.id)]);
-  const busy = useStore((s) => (s.monitor.activity[sessionId(project.id, tab.id)] ?? 0) > 0);
+  const sid = sessionId(project.id, tab.id);
+  const session = useStore((s) => s.sessions[sid]);
+  const busy = useStore((s) => (s.monitor.activity[sid] ?? 0) > 0);
+  const agent = useStore((s) => s.monitor.agents[sid] ?? null);
+  const attention = useStore((s) => sid in s.attention);
+  const streaming = useStore((s) => Date.now() - (s.lastOutput[sid] ?? 0) < 3000);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(tab.name);
 
@@ -101,7 +113,7 @@ function TerminalTabButton({ project, tab, active, closable }: { project: Projec
   }
   return (
     <button
-      className={"tab" + (active ? " active" : "") + (session && !session.alive ? " dead" : "")}
+      className={"tab" + (active ? " active" : "") + (session && !session.alive ? " dead" : "") + (attention ? " attention" : "")}
       onClick={() => updateLayout(project.id, { activeTab: tab.id })}
       onDoubleClick={() => {
         setName(tab.name);
@@ -112,8 +124,9 @@ function TerminalTabButton({ project, tab, active, closable }: { project: Projec
       }}
       title="double-click to rename · ⌘W or middle-click to close · ⌘⇧] next tab"
     >
-      <span className={"tab-dot" + (busy ? " busy" : "")} />
+      <span className={"tab-dot" + (attention ? " attention" : streaming ? " streaming" : busy ? " busy" : "")} />
       {tab.name}
+      {agent && <span className="tab-agent">{agent}</span>}
       {closable && (
         <span
           className="tab-close"

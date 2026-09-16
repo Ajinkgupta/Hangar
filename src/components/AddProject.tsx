@@ -4,12 +4,18 @@ import { useStore } from "../store";
 
 export function AddProjectButton({ large = false }: { large?: boolean }) {
   const addProject = useStore((s) => s.addProject);
+  const setError = useStore((s) => s.setError);
   const [pasting, setPasting] = useState(false);
   const [path, setPath] = useState("");
 
   const pick = async () => {
-    const dir = await open({ directory: true, multiple: false, title: "Add project folder" });
-    if (typeof dir === "string" && dir) await addProject(dir);
+    try {
+      const dir = await open({ directory: true, multiple: false, title: "Add project folder" });
+      if (typeof dir === "string" && dir) await addProject(dir);
+    } catch (e) {
+      setError(`Could not open folder picker: ${e}`);
+      setPasting(true);
+    }
   };
   const submitPath = async () => {
     const p = path.trim().replace(/^~/, homeDir());
@@ -32,22 +38,26 @@ export function AddProjectButton({ large = false }: { large?: boolean }) {
             if (e.key === "Escape") setPasting(false);
           }}
         />
-        <button onClick={() => void submitPath()}>Add</button>
-        <button className="ghost" onClick={() => setPasting(false)}>Cancel</button>
+        <div className="add-path-actions">
+          <button className="primary small" onClick={() => void submitPath()}>Add</button>
+          <button className="ghost small" onClick={() => setPasting(false)}>Cancel</button>
+        </div>
       </div>
     );
   }
   return (
     <div className={"add-project" + (large ? " large" : "")}>
-      <button className="primary" onClick={() => void pick()}>+ Add project</button>
-      <button className="ghost" onClick={() => setPasting(true)} title="Paste a path instead">paste path</button>
+      <button className="primary add-btn" onClick={() => void pick()}>
+        + Add project
+      </button>
+      <button className="ghost small link" onClick={() => setPasting(true)}>
+        or paste a path
+      </button>
     </div>
   );
 }
 
 function homeDir(): string {
-  // Tauri's webview doesn't expose $HOME; the daemon resolves relative paths from its own cwd,
-  // so expand ~ using the conventional macOS location of the current user.
   const m = /^\/Users\/[^/]+/.exec(document.location.href);
   return m ? m[0] : "";
 }

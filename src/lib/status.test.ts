@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { deriveStatus, projectPort } from "./status";
 
-const empty = { ports: [], activity: {}, error: null };
+const empty = { ports: [], activity: {}, agents: {}, error: null };
 
 describe("deriveStatus", () => {
   it("is idle with live shells and nothing running", () => {
@@ -16,6 +16,10 @@ describe("deriveStatus", () => {
     expect(deriveStatus("p", {}, m)).toBe("running");
     expect(projectPort("p", m)).toBe(3000);
     expect(projectPort("q", m)).toBeNull();
+  });
+  it("is attention when a terminal of the project rang the bell", () => {
+    expect(deriveStatus("p", {}, { ...empty, activity: { "p:t1": 3 } }, { "p:t1": 1 })).toBe("attention");
+    expect(deriveStatus("q", {}, empty, { "p:t1": 1 })).toBe("idle");
   });
   it("is error when a session died, even if the other is busy", () => {
     const s = { "p:t2": { alive: false, pid: 2, exitCode: 1 } };

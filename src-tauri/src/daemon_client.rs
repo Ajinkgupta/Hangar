@@ -34,6 +34,10 @@ struct OutputPayload {
     data: String,
 }
 #[derive(Serialize, Clone)]
+struct BellPayload {
+    id: String,
+}
+#[derive(Serialize, Clone)]
 struct DaemonBuild {
     stale: bool,
     build: String,
@@ -148,6 +152,9 @@ pub async fn start(app: AppHandle) {
                         Ok(ServerMessage::Event(Event::Output { id, data })) => {
                             use base64::Engine;
                             let bytes = base64::engine::general_purpose::STANDARD.decode(&data).unwrap_or_default();
+                            if bytes.contains(&0x07) {
+                                let _ = app.emit("pty:bell", BellPayload { id: id.clone() });
+                            }
                             pending_bytes += bytes.len();
                             match pending_out.iter_mut().find(|(i, _)| *i == id) {
                                 Some((_, buf)) => buf.extend_from_slice(&bytes),
@@ -252,6 +259,28 @@ pub async fn pty_create(
         ReplyBody::Created { pid, .. } => Ok(pid),
         other => Err(format!("unexpected reply {other:?}")),
     }
+}
+
+/// Last `lines` lines of a session's scrollback as plain text (ANSI stripped).
+#[tauri::command]
+pub async fn pty_tail(state: State<'_, DaemonState>, id: String, lines: usize) -> Result<Vec<String>, String> {
+    let data = match state.request(Cmd::Scrollback { id }).await? {
+        ReplyBody::Scrollback { data, .. } => data,
+        other => return Err(format!("unexpected reply {other:?}")),
+    };
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&data).map_err(|e| e.to_string())?;
+    let start = bytes.len().saturating_sub(64 * 1024);
+    let text = String::from_utf8_lossy(&bytes[start..]);
+    let plain = crate::monitor::strip_ansi(&text);
+    let mut out: Vec<String> = plain
+        .split(['\n', '\r'])
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let keep = out.len().saturating_sub(lines);
+    out.drain(..keep);
+    Ok(out)
 }
 
 #[tauri::command]

@@ -28,7 +28,39 @@ pub struct MonitorSnapshot {
     pub ports: Vec<PortRow>,
     /// session id -> number of processes running under that session's shell
     pub activity: HashMap<String, u32>,
+    /// session id -> name of the coding agent running in it (claude, codex, ...)
+    pub agents: HashMap<String, String>,
     pub error: Option<String>,
+}
+
+/// Process names that count as "an agent is running here".
+const AGENTS: &[&str] = &["claude", "codex", "cursor-agent", "aider", "gemini", "opencode", "amp", "copilot", "goose"];
+
+/// For every session shell, the first agent found among its descendants.
+pub fn agents(procs: &HashMap<u32, Proc>, sessions: &HashMap<u32, String>) -> HashMap<String, String> {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (&p, info) in procs {
+        children.entry(info.ppid).or_default().push(p);
+    }
+    let mut out = HashMap::new();
+    for (&pid, id) in sessions {
+        let mut stack = vec![pid];
+        'walk: while let Some(p) = stack.pop() {
+            if let Some(kids) = children.get(&p) {
+                for &k in kids {
+                    let name = procs.get(&k).map(|x| x.name.to_ascii_lowercase()).unwrap_or_default();
+                    // node-based agents show up as "node"; their script path is not in comm, so
+                    // also accept a parent shell wrapper named after the agent.
+                    if let Some(a) = AGENTS.iter().find(|a| name == **a || name.starts_with(&format!("{a} ")) || name.ends_with(&format!("/{a}"))) {
+                        out.insert(id.clone(), a.to_string());
+                        break 'walk;
+                    }
+                    stack.push(k);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Parses `netstat -anv -p tcp` output: one listener per (pid, port).
@@ -149,6 +181,42 @@ pub fn activity(procs: &HashMap<u32, Proc>, sessions: &HashMap<u32, String>) -> 
     out
 }
 
+/// Removes ANSI escape sequences (CSI, OSC, simple ESC-x) and other control bytes.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    // CSI: params then a final byte 0x40..=0x7e
+                    for d in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&d) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC: until BEL or ESC \
+                    let mut prev = ' ';
+                    for d in chars.by_ref() {
+                        if d == '\x07' || (prev == '\x1b' && d == '\\') {
+                            break;
+                        }
+                        prev = d;
+                    }
+                }
+                Some(_) | None => {}
+            }
+            continue;
+        }
+        if c == '\n' || c == '\r' || c == '\t' || !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     let out = Command::new(cmd).args(args).output().map_err(|e| format!("{cmd}: {e}"))?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
@@ -171,6 +239,7 @@ pub async fn monitor_tick(session_pids: HashMap<String, u32>) -> MonitorSnapshot
         MonitorSnapshot {
             ports: build_rows(parse_netstat(&ns), &procs, &sessions),
             activity: activity(&procs, &sessions),
+            agents: agents(&procs, &sessions),
             error: None,
         }
     })
@@ -242,5 +311,19 @@ tcp4       0      0  127.0.0.1.52000        127.0.0.1.52001        ESTABLISHED 0
         assert!(!cursor.conflict);
         assert_eq!(cursor.process, "Cursor Helper (Plugin)");
         assert_eq!(activity(&procs, &sessions).get("proj:t1"), Some(&1));
+    }
+
+    #[test]
+    fn strips_ansi_sequences() {
+        assert_eq!(strip_ansi("\x1b[32mok\x1b[0m \x1b]0;title\x07x\r\n"), "ok x\r\n");
+    }
+
+    #[test]
+    fn detects_agent_processes_under_a_session_shell() {
+        let procs = parse_ps("1 0 launchd\n100 1 /bin/zsh\n200 100 claude\n300 200 node\n400 1 /bin/zsh\n500 400 /usr/bin/vim\n");
+        let sessions: HashMap<u32, String> = [(100u32, "a:t".to_string()), (400u32, "b:t".to_string())].into();
+        let a = agents(&procs, &sessions);
+        assert_eq!(a.get("a:t").map(String::as_str), Some("claude"));
+        assert_eq!(a.get("b:t"), None);
     }
 }

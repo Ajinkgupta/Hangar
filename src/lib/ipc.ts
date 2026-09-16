@@ -10,7 +10,13 @@ export type PortRow = {
   session_id: string | null;
   conflict: boolean;
 };
-export type MonitorSnapshot = { ports: PortRow[]; activity: Record<string, number>; error: string | null };
+export type MonitorSnapshot = {
+  ports: PortRow[];
+  activity: Record<string, number>;
+  agents: Record<string, string>;
+  error: string | null;
+};
+export type GitSummary = { path: string; is_repo: boolean; files: number; additions: number; deletions: number; branch: string };
 export type FileStatus = { path: string; status: string; staged: boolean; old_path: string | null };
 export type GitStatus = { is_repo: boolean; files: FileStatus[]; error: string | null };
 
@@ -19,6 +25,7 @@ export const pty = {
   create: (id: string, cwd: string, cols: number, rows: number, initialCommand?: string) =>
     invoke<number>("pty_create", { id, cwd, cols, rows, initialCommand: initialCommand ?? null }),
   scrollback: (id: string) => invoke<string>("pty_scrollback", { id }),
+  tail: (id: string, lines: number) => invoke<string[]>("pty_tail", { id, lines }),
   write: (id: string, data: string) => invoke<void>("pty_write", { id, data }),
   resize: (id: string, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   kill: (id: string) => invoke<void>("pty_kill", { id }),
@@ -28,6 +35,10 @@ export const pty = {
 export const daemonStatus = () => invoke<boolean>("daemon_status");
 export const daemonRestart = () => invoke<void>("daemon_restart");
 export const openUrl = (url: string) => invoke<void>("open_url", { url });
+export const openInEditor = (appName: string, path: string) => invoke<void>("open_in_editor", { appName, path });
+export const detectEditors = () => invoke<string[]>("detect_editors");
+export const notify = (title: string, body: string, sound: boolean) => invoke<void>("notify", { title, body, sound });
+export const traySetStatus = (waiting: number, running: number) => invoke<void>("tray_set_status", { waiting, running });
 
 export const monitorTick = (sessionPids: Record<string, number>) =>
   invoke<MonitorSnapshot>("monitor_tick", { sessionPids });
@@ -37,6 +48,8 @@ export const git = {
   status: (path: string) => invoke<GitStatus>("git_status", { path }),
   diff: (path: string, file: string, untracked: boolean, oldPath: string | null) =>
     invoke<string>("git_diff", { path, file, untracked, oldPath }),
+  summary: (paths: string[]) => invoke<GitSummary[]>("git_summary", { paths }),
+  worktreeAdd: (path: string, branch: string) => invoke<string>("git_worktree_add", { path, branch }),
 };
 
 export const config = {
@@ -49,6 +62,7 @@ export const on = {
     listen<{ id: string; data: string }>("pty:output", (e) => cb(e.payload)),
   ptyExit: (cb: (p: { id: string; code: number | null }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; code: number | null }>("pty:exit", (e) => cb(e.payload)),
+  ptyBell: (cb: (p: { id: string }) => void): Promise<UnlistenFn> => listen<{ id: string }>("pty:bell", (e) => cb(e.payload)),
   daemonConnected: (cb: () => void) => listen("daemon:connected", () => cb()),
   daemonDisconnected: (cb: () => void) => listen("daemon:disconnected", () => cb()),
   daemonBuild: (cb: (p: { stale: boolean; build: string }) => void) =>

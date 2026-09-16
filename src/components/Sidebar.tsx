@@ -6,13 +6,17 @@ import { useStore } from "../store";
 import { deriveStatus, projectPort } from "../lib/status";
 import type { Project } from "../lib/types";
 import { AddProjectButton } from "./AddProject";
+import { openInEditor, openUrl } from "../lib/ipc";
 
 type Menu = { id: string; x: number; y: number };
 
 export function Sidebar() {
   const projects = useStore((s) => s.config.projects);
   const activeId = useStore((s) => s.config.activeProjectId);
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
   const reorder = useStore((s) => s.reorderProjects);
+  const waiting = useStore((s) => Object.keys(s.attention).length);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -37,15 +41,23 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-title"><img src="/logo.svg" alt="" className="logo" /> Hangar</div>
+      <div className="sidebar-title">
+        <img src="/logo.svg" alt="" className="logo" /> Hangar
+      </div>
+      <button className={"overview-item" + (view === "overview" ? " active" : "")} onClick={() => setView("overview")} title="All projects at a glance (⌘0)">
+        <span className="grid-icon">▦</span> Overview
+        {waiting > 0 && <span className="waiting-badge">{waiting} waiting</span>}
+      </button>
+      <div className="sidebar-section">Projects</div>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
           <ul className="project-list">
-            {projects.map((p) => (
+            {projects.map((p, i) => (
               <ProjectItem
                 key={p.id}
                 project={p}
-                active={p.id === activeId}
+                index={i}
+                active={view === "project" && p.id === activeId}
                 renaming={renaming === p.id}
                 onRenamed={() => setRenaming(null)}
                 onContextMenu={(x, y) => setMenu({ id: p.id, x, y })}
@@ -73,12 +85,14 @@ export function Sidebar() {
 
 function ProjectItem({
   project,
+  index,
   active,
   renaming,
   onRenamed,
   onContextMenu,
 }: {
   project: Project;
+  index: number;
   active: boolean;
   renaming: boolean;
   onRenamed: () => void;
@@ -86,8 +100,13 @@ function ProjectItem({
 }) {
   const setActive = useStore((s) => s.setActive);
   const rename = useStore((s) => s.renameProject);
-  const status = useStore((s) => deriveStatus(project.id, s.sessions, s.monitor));
+  const status = useStore((s) => deriveStatus(project.id, s.sessions, s.monitor, s.attention));
   const port = useStore((s) => projectPort(project.id, s.monitor));
+  const agent = useStore((s) => {
+    const a = Object.entries(s.monitor.agents).find(([sid]) => sid.startsWith(project.id + ":"));
+    return a ? a[1] : null;
+  });
+  const summary = useStore((s) => s.gitSummary[project.path]);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: project.id });
   const [name, setName] = useState(project.name);
   useEffect(() => setName(project.name), [project.name, renaming]);
@@ -98,37 +117,64 @@ function ProjectItem({
     onRenamed();
   };
 
+  const title = `${project.path}${status === "attention" ? "\nneeds your attention" : ""}\n⌘${index + 1}`;
   return (
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 }}
-      className={"project-item" + (active ? " active" : "")}
+      className={"project-item" + (active ? " active" : "") + (status === "attention" ? " attention" : "")}
       onClick={() => setActive(project.id)}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(e.clientX, e.clientY);
       }}
+      title={title}
       {...attributes}
       {...listeners}
     >
-      <span className={"dot " + status} title={status} />
-      {renaming ? (
-        <input
-          className="rename"
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            if (e.key === "Escape") onRenamed();
+      <span className={"dot " + status} />
+      <div className="project-item-body">
+        {renaming ? (
+          <input
+            className="rename"
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+              if (e.key === "Escape") onRenamed();
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="name">{project.name}</span>
+        )}
+        <span className="project-meta">
+          {status === "attention" ? (
+            <span className="meta attention">needs you</span>
+          ) : agent ? (
+            <span className="meta agent">{agent}</span>
+          ) : null}
+          {summary?.is_repo && summary.files > 0 && (
+            <span className="meta changes" title={`${summary.files} changed files on ${summary.branch}`}>
+              <span className="add">+{summary.additions}</span> <span className="del">−{summary.deletions}</span>
+            </span>
+          )}
+        </span>
+      </div>
+      {port !== null && (
+        <span
+          className="port-badge"
+          title={`open http://localhost:${port}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void openUrl(`http://localhost:${port}`);
           }}
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <span className="name" title={project.path}>{project.name}</span>
+        >
+          :{port}
+        </span>
       )}
-      {port !== null && <span className="port-badge">:{port}</span>}
     </li>
   );
 }
@@ -147,11 +193,36 @@ function DaemonIndicator() {
 function ContextMenu({ menu, onRename }: { menu: Menu; onRename: () => void }) {
   const stop = useStore((s) => s.stopSessions);
   const remove = useStore((s) => s.removeProject);
+  const setWorktreeFor = useStore((s) => s.setWorktreeFor);
+  const editors = useStore((s) => s.editors);
+  const project = useStore((s) => s.config.projects.find((p) => p.id === menu.id));
+  const isRepo = useStore((s) => (project ? s.gitSummary[project.path]?.is_repo : false));
+  const done = () => window.dispatchEvent(new Event("click"));
   return (
     <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+      {editors[0] && project && (
+        <button
+          onClick={() => {
+            void openInEditor(editors[0], project.path);
+            done();
+          }}
+        >
+          Open in {editors[0]}
+        </button>
+      )}
       <button onClick={onRename}>Rename</button>
-      <button onClick={() => void stop(menu.id).then(() => window.dispatchEvent(new Event("click")))}>Stop sessions</button>
-      <button className="danger" onClick={() => void remove(menu.id).then(() => window.dispatchEvent(new Event("click")))}>
+      {isRepo && (
+        <button
+          onClick={() => {
+            setWorktreeFor(menu.id);
+            done();
+          }}
+        >
+          New worktree…
+        </button>
+      )}
+      <button onClick={() => void stop(menu.id).then(done)}>Stop all terminals</button>
+      <button className="danger" onClick={() => void remove(menu.id).then(done)}>
         Remove from Hangar
       </button>
     </div>

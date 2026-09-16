@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { config as configIpc, pty, type MonitorSnapshot } from "./lib/ipc";
+import { config as configIpc, git, pty, type GitSummary, type MonitorSnapshot } from "./lib/ipc";
 import type { SessionState } from "./lib/status";
 import {
   CHANGES_TAB,
@@ -16,7 +16,7 @@ import {
 } from "./lib/types";
 import { terminals } from "./lib/terminals";
 
-const EMPTY_MONITOR: MonitorSnapshot = { ports: [], activity: {}, error: null };
+const EMPTY_MONITOR: MonitorSnapshot = { ports: [], activity: {}, agents: {}, error: null };
 type LiveSessions = Record<string, { pid: number; alive: boolean; exit_code: number | null }>;
 
 export interface HangarState {
@@ -28,6 +28,15 @@ export interface HangarState {
   monitor: MonitorSnapshot;
   showAllPorts: boolean;
   lastError: string | null;
+  /** session id -> when its bell last rang and nobody was looking */
+  attention: Record<string, number>;
+  /** session id -> last time output arrived (throttled to ~1/s) */
+  lastOutput: Record<string, number>;
+  gitSummary: Record<string, GitSummary>;
+  editors: string[];
+  view: "project" | "overview";
+  paletteOpen: boolean;
+  worktreeFor: string | null;
 
   init: () => Promise<void>;
   addProject: (path: string) => Promise<void>;
@@ -53,6 +62,16 @@ export interface HangarState {
   setDaemonConnected: (v: boolean) => void;
   setDaemonStale: (v: boolean) => void;
   setError: (e: string | null) => void;
+
+  markAttention: (sessionId: string) => void;
+  clearAttention: (sessionId: string) => void;
+  noteOutput: (sessionId: string) => void;
+  setGitSummary: (list: GitSummary[]) => void;
+  setEditors: (e: string[]) => void;
+  setView: (v: "project" | "overview") => void;
+  setPaletteOpen: (v: boolean) => void;
+  setWorktreeFor: (projectId: string | null) => void;
+  addWorktree: (projectId: string, branch: string) => Promise<void>;
 }
 
 function patchProject(cfg: Config, id: string, fn: (p: Project) => Project): Config {
@@ -68,6 +87,13 @@ export const useStore = create<HangarState>((set, get) => ({
   monitor: EMPTY_MONITOR,
   showAllPorts: false,
   lastError: null,
+  attention: {},
+  lastOutput: {},
+  gitSummary: {},
+  editors: [],
+  view: "project",
+  paletteOpen: false,
+  worktreeFor: null,
 
   init: async () => {
     const raw = await configIpc.load();
@@ -112,7 +138,7 @@ export const useStore = create<HangarState>((set, get) => ({
       return { config: { ...s.config, projects } };
     }),
 
-  setActive: (id) => set((s) => ({ config: { ...s.config, activeProjectId: id } })),
+  setActive: (id) => set((s) => ({ config: { ...s.config, activeProjectId: id }, view: "project" })),
 
   updateLayout: (id, patch) =>
     set((s) => ({ config: patchProject(s.config, id, (p) => ({ ...p, layout: { ...p.layout, ...patch } })) })),
@@ -239,6 +265,38 @@ export const useStore = create<HangarState>((set, get) => ({
   toggleShowAllPorts: () => set((s) => ({ showAllPorts: !s.showAllPorts })),
   setDaemonConnected: (daemonConnected) => set({ daemonConnected }),
   setDaemonStale: (daemonStale) => set({ daemonStale }),
+
+  markAttention: (sid) => set((s) => ({ attention: { ...s.attention, [sid]: Date.now() } })),
+  clearAttention: (sid) =>
+    set((s) => {
+      if (!(sid in s.attention)) return {};
+      const attention = { ...s.attention };
+      delete attention[sid];
+      return { attention };
+    }),
+  noteOutput: (sid) =>
+    set((s) => {
+      const now = Date.now();
+      if (now - (s.lastOutput[sid] ?? 0) < 1000) return {};
+      return { lastOutput: { ...s.lastOutput, [sid]: now } };
+    }),
+  setGitSummary: (list) => set({ gitSummary: Object.fromEntries(list.map((g) => [g.path, g])) }),
+  setEditors: (editors) => set({ editors }),
+  setView: (view) => set({ view }),
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setWorktreeFor: (worktreeFor) => set({ worktreeFor }),
+  addWorktree: async (projectId, branch) => {
+    const project = get().config.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    try {
+      const path = await git.worktreeAdd(project.path, branch);
+      const p = { ...newProject(path), name: `${project.name} · ${branch}` };
+      set((s) => ({ config: { ...s.config, projects: [...s.config.projects, p], activeProjectId: p.id }, view: "project", worktreeFor: null }));
+      await get().ensureSessions(p);
+    } catch (e) {
+      get().setError(`Worktree failed: ${e}`);
+    }
+  },
   setError: (lastError) => set({ lastError }),
 }));
 

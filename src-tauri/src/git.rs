@@ -102,6 +102,79 @@ pub async fn git_diff(path: String, file: String, untracked: bool, old_path: Opt
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct GitSummary {
+    pub path: String,
+    pub is_repo: bool,
+    pub files: u32,
+    pub additions: u32,
+    pub deletions: u32,
+    pub branch: String,
+}
+
+fn summary_one(path: &str) -> GitSummary {
+    let mut s = GitSummary { path: path.to_string(), ..Default::default() };
+    let Ok(st) = git(path, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else { return s };
+    if !st.status.success() {
+        return s;
+    }
+    s.is_repo = true;
+    s.files = parse_porcelain_z(&st.stdout).len() as u32;
+    if let Ok(b) = git(path, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+        s.branch = String::from_utf8_lossy(&b.stdout).trim().to_string();
+    }
+    if let Ok(d) = git(path, &["diff", "--numstat", "HEAD"]) {
+        for line in String::from_utf8_lossy(&d.stdout).lines() {
+            let mut it = line.split('\t');
+            if let (Some(a), Some(r)) = (it.next(), it.next()) {
+                s.additions += a.parse::<u32>().unwrap_or(0);
+                s.deletions += r.parse::<u32>().unwrap_or(0);
+            }
+        }
+    }
+    s
+}
+
+/// Cheap per-project git summary for badges (files changed, +/- lines, branch).
+#[tauri::command]
+pub async fn git_summary(paths: Vec<String>) -> Vec<GitSummary> {
+    tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| summary_one(p)).collect())
+        .await
+        .unwrap_or_default()
+}
+
+/// `git worktree add -b <branch> <sibling dir>`; returns the new folder.
+#[tauri::command]
+pub async fn git_worktree_add(path: String, branch: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let branch = branch.trim().to_string();
+        if branch.is_empty() || branch.contains(char::is_whitespace) {
+            return Err("branch name must be a single word".into());
+        }
+        let root = std::path::Path::new(&path);
+        let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or("repo".into());
+        let safe = branch.replace('/', "-");
+        let target = root.parent().unwrap_or(root).join(format!("{name}-{safe}"));
+        if target.exists() {
+            return Err(format!("{} already exists", target.display()));
+        }
+        let t = target.to_string_lossy().to_string();
+        // Reuse the branch if it exists, otherwise create it from HEAD.
+        let exists = git(&path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])?.status.success();
+        let out = if exists {
+            git(&path, &["worktree", "add", &t, &branch])?
+        } else {
+            git(&path, &["worktree", "add", "-b", &branch, &t])?
+        };
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(t)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
