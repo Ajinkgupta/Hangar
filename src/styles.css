@@ -248,6 +248,7 @@ button.small { font-size: 11px; padding: 2px 8px; }
 .conn-item:hover { background: var(--bg-3); }
 .conn-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn-icon { color: var(--accent); font-size: 12px; }
+.conn-item .dot { width: 7px; height: 7px; }
 .dialog.wide { width: 620px; }
 .steps { display: flex; flex-direction: column; gap: 6px; }
 .steps-head, .step { display: grid; grid-template-columns: 1fr 1.4fr 28px; gap: 6px; align-items: center; }

@@ -216,21 +216,7 @@ function ConnectionsSection() {
       <ul className="conn-list">
         {connections.length === 0 && <li className="hint">No connections yet. Click + to save an ssh or bastion command.</li>}
         {connections.map((c) => (
-          <li
-            key={c.id}
-            className="conn-item"
-            title={`${c.command}
-click to connect · right-click to edit`}
-            onClick={() => void run(c.id)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setMenu({ c, x: e.clientX, y: e.clientY });
-            }}
-          >
-            <span className="conn-icon">⇄</span>
-            <span className="name">{c.name}</span>
-            {c.steps.some((s) => s.secretRef) && <span className="meta" title="has a saved password">🔑</span>}
-          </li>
+          <ConnectionItem key={c.id} c={c} onRun={() => void run(c.id)} onMenu={(x, y) => setMenu({ c, x, y })} />
         ))}
       </ul>
       {menu && (
@@ -247,6 +233,34 @@ click to connect · right-click to edit`}
         </div>
       )}
     </div>
+  );
+}
+
+function ConnectionItem({ c, onRun, onMenu }: { c: Connection; onRun: () => void; onMenu: (x: number, y: number) => void }) {
+  const state = useStore((s) => {
+    const tid = s.config.connectionRuns[c.id];
+    if (!tid) return "none";
+    const sid = `${SSH_PROJECT_ID}:${tid}`;
+    if (s.sessions[sid]?.alive === false) return "dead";
+    if ((s.monitor.activity[sid] ?? 0) > 0 || s.connecting[sid] === "running") return "connected";
+    return "idle";
+  });
+  const label = state === "connected" ? "connected - click to show" : state === "idle" ? "disconnected - click to reconnect in its tab" : "click to connect";
+  return (
+    <li
+      className={"conn-item " + state}
+      title={c.command + " · " + label + " · right-click to edit"}
+      onClick={onRun}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(e.clientX, e.clientY);
+      }}
+    >
+      <span className={"dot " + (state === "connected" ? "running" : state === "dead" ? "error" : "")} />
+      <span className="name">{c.name}</span>
+      {state === "connected" && <span className="meta live">live</span>}
+      {c.steps.some((s) => s.secretRef) && <span className="meta" title="has a saved password">🔑</span>}
+    </li>
   );
 }
 
