@@ -26,7 +26,22 @@ impl RingBuf {
     }
 
     pub fn contents(&self) -> Vec<u8> {
-        self.buf.iter().copied().collect()
+        self.tail(self.buf.len())
+    }
+
+    /// Last `n` bytes (or everything if shorter), copied with two memcpys.
+    pub fn tail(&self, n: usize) -> Vec<u8> {
+        let n = n.min(self.buf.len());
+        let (a, b) = self.buf.as_slices();
+        let mut out = Vec::with_capacity(n);
+        let skip = self.buf.len() - n;
+        if skip < a.len() {
+            out.extend_from_slice(&a[skip..]);
+            out.extend_from_slice(b);
+        } else {
+            out.extend_from_slice(&b[skip - a.len()..]);
+        }
+        out
     }
 
     pub fn len(&self) -> usize {
@@ -48,6 +63,17 @@ mod tests {
         r.push(b"abc");
         r.push(b"defg");
         assert_eq!(r.contents(), b"cdefg");
+    }
+
+    #[test]
+    fn tail_returns_last_n_bytes_across_wraparound() {
+        let mut r = RingBuf::new(6);
+        r.push(b"abcd");
+        r.push(b"efgh"); // wraps; buffer = "cdefgh"
+        assert_eq!(r.contents(), b"cdefgh");
+        assert_eq!(r.tail(3), b"fgh");
+        assert_eq!(r.tail(100), b"cdefgh");
+        assert_eq!(r.tail(0), b"");
     }
 
     #[test]

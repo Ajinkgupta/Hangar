@@ -113,12 +113,52 @@ pub async fn start(app: AppHandle) {
                 });
 
                 let mut lines = BufReader::new(rd).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                // Terminal output is coalesced per session for up to FLUSH_WINDOW (or
+                // FLUSH_BYTES) so a chatty program costs a few IPC events per frame, not
+                // one per PTY read.
+                const FLUSH_WINDOW: Duration = Duration::from_millis(4);
+                const FLUSH_BYTES: usize = 64 * 1024;
+                let mut pending_out: Vec<(String, Vec<u8>)> = Vec::new();
+                let mut pending_bytes = 0usize;
+                let flush = |pending_out: &mut Vec<(String, Vec<u8>)>, pending_bytes: &mut usize| {
+                    use base64::Engine;
+                    for (id, bytes) in pending_out.drain(..) {
+                        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let _ = app.emit("pty:output", OutputPayload { id, data });
+                    }
+                    *pending_bytes = 0;
+                };
+                loop {
+                    let next = if pending_out.is_empty() {
+                        lines.next_line().await
+                    } else {
+                        match tokio::time::timeout(FLUSH_WINDOW, lines.next_line()).await {
+                            Ok(r) => r,
+                            Err(_) => {
+                                flush(&mut pending_out, &mut pending_bytes);
+                                continue;
+                            }
+                        }
+                    };
+                    let line = match next {
+                        Ok(Some(l)) => l,
+                        _ => break,
+                    };
                     match serde_json::from_str::<ServerMessage>(&line) {
                         Ok(ServerMessage::Event(Event::Output { id, data })) => {
-                            let _ = app.emit("pty:output", OutputPayload { id, data });
+                            use base64::Engine;
+                            let bytes = base64::engine::general_purpose::STANDARD.decode(&data).unwrap_or_default();
+                            pending_bytes += bytes.len();
+                            match pending_out.iter_mut().find(|(i, _)| *i == id) {
+                                Some((_, buf)) => buf.extend_from_slice(&bytes),
+                                None => pending_out.push((id, bytes)),
+                            }
+                            if pending_bytes >= FLUSH_BYTES {
+                                flush(&mut pending_out, &mut pending_bytes);
+                            }
                         }
                         Ok(ServerMessage::Event(Event::Exit { id, code })) => {
+                            flush(&mut pending_out, &mut pending_bytes);
                             let _ = app.emit("pty:exit", ExitPayload { id, code });
                         }
                         Ok(ServerMessage::Reply(r)) => {
@@ -131,6 +171,7 @@ pub async fn start(app: AppHandle) {
                         Err(e) => eprintln!("bad daemon message: {e}: {line}"),
                     }
                 }
+                flush(&mut pending_out, &mut pending_bytes);
                 writer.abort();
                 *conn_slot.lock().unwrap() = None;
                 pending.lock().unwrap().clear();

@@ -17,6 +17,7 @@ import {
 import { terminals } from "./lib/terminals";
 
 const EMPTY_MONITOR: MonitorSnapshot = { ports: [], activity: {}, error: null };
+type LiveSessions = Record<string, { pid: number; alive: boolean; exit_code: number | null }>;
 
 export interface HangarState {
   config: Config;
@@ -41,7 +42,7 @@ export interface HangarState {
   closeTerminal: (projectId: string, terminalId: string) => Promise<void>;
   renameTerminal: (projectId: string, terminalId: string, name: string) => void;
 
-  ensureSessions: (project: Project) => Promise<void>;
+  ensureSessions: (project: Project, live?: LiveSessions) => Promise<void>;
   ensureAllSessions: () => Promise<void>;
   stopSessions: (id: string) => Promise<void>;
   restartSession: (projectId: string, terminalId: string) => Promise<void>;
@@ -167,13 +168,14 @@ export const useStore = create<HangarState>((set, get) => ({
       })),
     })),
 
-  ensureSessions: async (project) => {
-    let live: Record<string, { pid: number; alive: boolean; exit_code: number | null }> = {};
-    try {
-      live = Object.fromEntries((await pty.list()).map((s) => [s.id, s]));
-    } catch (e) {
-      get().setError(String(e));
-      return;
+  ensureSessions: async (project, live) => {
+    if (!live) {
+      try {
+        live = Object.fromEntries((await pty.list()).map((s) => [s.id, s]));
+      } catch (e) {
+        get().setError(String(e));
+        return;
+      }
     }
     for (const t of project.terminals) {
       const sid = sessionId(project.id, t.id);
@@ -192,7 +194,14 @@ export const useStore = create<HangarState>((set, get) => ({
   },
 
   ensureAllSessions: async () => {
-    for (const p of get().config.projects) await get().ensureSessions(p);
+    let live: LiveSessions;
+    try {
+      live = Object.fromEntries((await pty.list()).map((s) => [s.id, s]));
+    } catch (e) {
+      get().setError(String(e));
+      return;
+    }
+    await Promise.all(get().config.projects.map((p) => get().ensureSessions(p, live)));
   },
 
   stopSessions: async (id) => {

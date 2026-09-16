@@ -55,6 +55,9 @@ fn load_previous_log(path: &Path) -> Vec<u8> {
     v
 }
 
+/// Called only every `ROTATE_CHECK_EVERY` bytes to keep syscalls off the hot path.
+const ROTATE_CHECK_EVERY: usize = 256 * 1024;
+
 fn rotate_if_needed(path: &Path, file: &mut File) {
     let Ok(len) = file.metadata().map(|m| m.len()) else { return };
     if len < LOG_ROTATE_AT {
@@ -150,6 +153,7 @@ impl Session {
             std::thread::spawn(move || {
                 let mut buf = [0u8; 16 * 1024];
                 let mut first = true;
+                let mut since_check = 0usize;
                 loop {
                     let n = match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
@@ -158,7 +162,11 @@ impl Session {
                     let chunk = &buf[..n];
                     shared.scrollback.lock().unwrap().push(chunk);
                     let _ = log.write_all(chunk);
-                    rotate_if_needed(&lp, &mut log);
+                    since_check += n;
+                    if since_check >= ROTATE_CHECK_EVERY {
+                        since_check = 0;
+                        rotate_if_needed(&lp, &mut log);
+                    }
                     let _ = events.send(Event::Output {
                         id: id.clone(),
                         data: b64(chunk),
@@ -233,8 +241,8 @@ impl Session {
             .context("resize")
     }
 
-    pub fn scrollback(&self) -> Vec<u8> {
-        self.shared.scrollback.lock().unwrap().contents()
+    pub fn scrollback_tail(&self, n: usize) -> Vec<u8> {
+        self.shared.scrollback.lock().unwrap().tail(n)
     }
 
     /// SIGHUP the shell's process group, then SIGKILL anything still alive.

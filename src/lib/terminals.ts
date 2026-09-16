@@ -16,6 +16,7 @@ type Entry = {
   term: Terminal;
   fit: FitAddon;
   search: SearchAddon;
+  webgl: WebglAddon | null;
   el: HTMLDivElement;
   opened: boolean;
   ready: boolean; // scrollback loaded; live output may be written directly
@@ -70,6 +71,21 @@ async function loadScrollback(id: string, e: Entry) {
   }
 }
 
+function attachWebgl(e: Entry) {
+  if (e.webgl) return;
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => {
+      webgl.dispose();
+      if (e.webgl === webgl) e.webgl = null;
+    });
+    e.term.loadAddon(webgl);
+    e.webgl = webgl;
+  } catch {
+    e.webgl = null; // DOM renderer
+  }
+}
+
 export const terminals = {
   get(id: string): Entry | undefined {
     return entries.get(id);
@@ -84,7 +100,7 @@ export const terminals = {
       const search = new SearchAddon();
       const el = document.createElement("div");
       el.className = "xterm-host";
-      e = { term, fit, search, el, opened: false, ready: false, queue: [], lastSize: null };
+      e = { term, fit, search, webgl: null, el, opened: false, ready: false, queue: [], lastSize: null };
       entries.set(id, e);
       term.onData((data) => {
         pty.write(id, b64encode(data)).catch(() => {});
@@ -125,14 +141,19 @@ export const terminals = {
     e.term.loadAddon(unicode);
     e.term.unicode.activeVersion = "11";
     e.term.open(e.el);
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      e.term.loadAddon(webgl);
-    } catch {
-      /* fall back to the DOM renderer */
-    }
+    attachWebgl(e);
     void loadScrollback(id, e);
+  },
+
+  /** Hidden terminals drop their GPU renderer; it comes back when shown. */
+  setVisible(id: string, visible: boolean) {
+    const e = entries.get(id);
+    if (!e || !e.opened) return;
+    if (visible) attachWebgl(e);
+    else if (e.webgl) {
+      e.webgl.dispose();
+      e.webgl = null;
+    }
   },
 
   detach(id: string) {
@@ -186,6 +207,7 @@ export const terminals = {
   destroy(id: string) {
     const e = entries.get(id);
     if (!e) return;
+    e.webgl?.dispose();
     e.term.dispose();
     e.el.remove();
     entries.delete(id);

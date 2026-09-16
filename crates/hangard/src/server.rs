@@ -81,15 +81,16 @@ impl Daemon {
             Cmd::Scrollback { id } => {
                 let s = self.sessions.lock().unwrap();
                 let data = match s.get(&id) {
-                    Some(sess) => sess.scrollback(),
+                    Some(sess) => sess.scrollback_tail(REPLAY_CAP),
                     // Not running: serve the on-disk tail so the UI can still show history.
                     None => {
                         let p = log_path(&self.data_dir, &id);
-                        std::fs::read(p).unwrap_or_default()
+                        let all = std::fs::read(p).unwrap_or_default();
+                        let start = all.len().saturating_sub(REPLAY_CAP);
+                        all[start..].to_vec()
                     }
                 };
-                let tail = if data.len() > REPLAY_CAP { &data[data.len() - REPLAY_CAP..] } else { &data[..] };
-                Ok(ReplyBody::Scrollback { id, data: b64(tail) })
+                Ok(ReplyBody::Scrollback { id, data: b64(&data) })
             }
             Cmd::Write { id, data } => {
                 let writer = {

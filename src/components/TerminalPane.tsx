@@ -46,9 +46,13 @@ export function TerminalPane({ project, tab, visible }: { project: Project; tab:
   }, [id]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      terminals.setVisible(id, false);
+      return;
+    }
     const raf = requestAnimationFrame(() => {
       terminals.open(id);
+      terminals.setVisible(id, true);
       terminals.fit(id);
       terminals.focus(id);
     });
