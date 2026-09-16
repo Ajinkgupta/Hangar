@@ -1,0 +1,17 @@
+[package]
+name = "hangard"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hangar-protocol = { path = "../hangar-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+base64.workspace = true
+libc.workspace = true
+anyhow.workspace = true
+portable-pty = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
