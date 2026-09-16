@@ -7,7 +7,8 @@ type Item = { key: string; label: string; hint: string; run: () => void };
 /** ⌘P: jump to any project or terminal by name. */
 export function CommandPalette() {
   const close = () => useStore.getState().setPaletteOpen(false);
-  const projects = useStore((s) => s.config.projects);
+  const projects = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh"));
+  const connections = useStore((s) => s.config.connections);
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
 
@@ -38,10 +39,13 @@ export function CommandPalette() {
       });
       out.push({ key: `${p.id}:new`, label: `${p.name} › new terminal`, hint: "⌘T", run: () => void s.addTerminal(p.id) });
     }
+    for (const c of connections) {
+      out.push({ key: `conn:${c.id}`, label: `ssh › ${c.name}`, hint: c.command, run: () => void s.runConnection(c.id) });
+    }
     const needle = q.trim().toLowerCase();
     if (!needle) return out;
     return out.filter((i) => fuzzy(i.label.toLowerCase(), needle) || i.hint.toLowerCase().includes(needle));
-  }, [projects, q]);
+  }, [projects, connections, q]);
 
   useEffect(() => setCursor(0), [q]);
 

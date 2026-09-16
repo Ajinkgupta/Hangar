@@ -6,7 +6,7 @@ import { openUrl, pty } from "../lib/ipc";
 
 /** Every project at a glance: status, agent, ports, changes, and the tail of its terminal. */
 export function Overview() {
-  const projects = useStore((s) => s.config.projects);
+  const projects = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh"));
   return (
     <div className="overview">
       <header className="overview-header">

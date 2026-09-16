@@ -233,3 +233,27 @@ button.small { font-size: 11px; padding: 2px 8px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-muted); }
 .dialog input { font-family: var(--mono); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+/* Connections */
+.connections { border-top: 1px solid var(--border); max-height: 40%; display: flex; flex-direction: column; }
+.conn-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.conn-head span.on { color: var(--accent); }
+.conn-head .meta { font-size: 10px; text-transform: none; letter-spacing: 0; }
+.conn-head button { margin-left: auto; padding: 0 6px; }
+.conn-list { list-style: none; margin: 0; padding: 0 8px 6px; overflow-y: auto; }
+.conn-list .hint { padding: 4px 8px; font-size: 11px; }
+.conn-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+.conn-item:hover { background: var(--bg-3); }
+.conn-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-icon { color: var(--accent); font-size: 12px; }
+.dialog.wide { width: 620px; }
+.steps { display: flex; flex-direction: column; gap: 6px; }
+.steps-head, .step { display: grid; grid-template-columns: 1fr 1.4fr 28px; gap: 6px; align-items: center; }
+.steps-head { font-size: 11px; color: var(--fg-muted); }
+.step input { font-family: var(--mono); font-size: 12px; width: 100%; }
+.step .send { display: flex; gap: 6px; align-items: center; }
+.step .send input[type="text"], .step .send input[type="password"] { flex: 1; min-width: 0; }
+.step .check { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.empty.small { padding: 24px; }
+.branch-chip { margin-left: 8px; font-weight: 500; font-size: 11px; font-family: var(--mono); color: var(--fg-muted); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; vertical-align: middle; }
+.project-meta .branch { overflow: hidden; text-overflow: ellipsis; }

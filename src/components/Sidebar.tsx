@@ -7,11 +7,12 @@ import { deriveStatus, projectPort } from "../lib/status";
 import type { Project } from "../lib/types";
 import { AddProjectButton } from "./AddProject";
 import { openInEditor, openUrl } from "../lib/ipc";
+import { SSH_PROJECT_ID, type Connection } from "../lib/types";
 
 type Menu = { id: string; x: number; y: number };
 
 export function Sidebar() {
-  const projects = useStore((s) => s.config.projects);
+  const projects = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh"));
   const activeId = useStore((s) => s.config.activeProjectId);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
@@ -66,6 +67,7 @@ export function Sidebar() {
           </ul>
         </SortableContext>
       </DndContext>
+      <ConnectionsSection />
       <div className="sidebar-footer">
         <AddProjectButton />
         <DaemonIndicator />
@@ -156,6 +158,7 @@ function ProjectItem({
           ) : agent ? (
             <span className="meta agent">{agent}</span>
           ) : null}
+          {summary?.is_repo && summary.branch && <span className="meta branch">⎇ {summary.branch}</span>}
           {summary?.is_repo && summary.files > 0 && (
             <span className="meta changes" title={`${summary.files} changed files on ${summary.branch}`}>
               <span className="add">+{summary.additions}</span> <span className="del">−{summary.deletions}</span>
@@ -176,6 +179,73 @@ function ProjectItem({
         </span>
       )}
     </li>
+  );
+}
+
+function ConnectionsSection() {
+  const connections = useStore((s) => s.config.connections);
+  const active = useStore((s) => s.view === "project" && s.config.activeProjectId === SSH_PROJECT_ID);
+  const sshTerminals = useStore((s) => s.config.projects.find((p) => p.id === SSH_PROJECT_ID)?.terminals.length ?? 0);
+  const run = useStore((s) => s.runConnection);
+  const setActive = useStore((s) => s.setActive);
+  const setEditor = useStore((s) => s.setConnectionEditor);
+  const [menu, setMenu] = useState<{ c: Connection; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [menu]);
+  return (
+    <div className="connections">
+      <div className="sidebar-section conn-head" onClick={() => setActive(SSH_PROJECT_ID)} title="Open the SSH terminals">
+        <span className={active ? "on" : ""}>SSH & bastions</span>
+        {sshTerminals > 0 && <span className="meta">{sshTerminals} open</span>}
+        <button
+          className="ghost small"
+          title="Add a connection"
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditor("new");
+          }}
+        >
+          +
+        </button>
+      </div>
+      <ul className="conn-list">
+        {connections.length === 0 && <li className="hint">No connections yet. Click + to save an ssh or bastion command.</li>}
+        {connections.map((c) => (
+          <li
+            key={c.id}
+            className="conn-item"
+            title={`${c.command}
+click to connect · right-click to edit`}
+            onClick={() => void run(c.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ c, x: e.clientX, y: e.clientY });
+            }}
+          >
+            <span className="conn-icon">⇄</span>
+            <span className="name">{c.name}</span>
+            {c.steps.some((s) => s.secretRef) && <span className="meta" title="has a saved password">🔑</span>}
+          </li>
+        ))}
+      </ul>
+      {menu && (
+        <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => void run(menu.c.id).then(() => setMenu(null))}>Connect</button>
+          <button
+            onClick={() => {
+              setEditor(menu.c);
+              setMenu(null);
+            }}
+          >
+            Edit…
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

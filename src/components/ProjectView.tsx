@@ -6,6 +6,7 @@ import { SavedCommandsBar } from "./SavedCommandsBar";
 import { PortsPanel } from "./PortsPanel";
 import { ChangesPane } from "./ChangesPane";
 import { openInEditor } from "../lib/ipc";
+import { ConnectionsBar } from "./ConnectionsBar";
 
 export function ProjectView({ project }: { project: Project }) {
   const updateLayout = useStore((s) => s.updateLayout);
@@ -13,7 +14,9 @@ export function ProjectView({ project }: { project: Project }) {
   const addTerminal = useStore((s) => s.addTerminal);
   const editors = useStore((s) => s.editors);
   const changed = useStore((s) => s.gitSummary[project.path]?.files ?? 0);
+  const branch = useStore((s) => s.gitSummary[project.path]?.branch ?? "");
   const { layout } = project;
+  const isSsh = project.kind === "ssh";
   const set = (patch: Parameters<typeof updateLayout>[1]) => updateLayout(project.id, patch);
 
   const mainContent = (
@@ -24,13 +27,18 @@ export function ProjectView({ project }: { project: Project }) {
             <TerminalPane project={project} tab={t} visible={layout.activeTab === t.id} />
           </div>
         ))}
-        {layout.activeTab === CHANGES_TAB && (
+        {layout.activeTab === CHANGES_TAB && !isSsh && (
           <div className="tab-pane">
             <ChangesPane project={project} />
           </div>
         )}
+        {isSsh && project.terminals.length === 0 && (
+          <div className="empty small">
+            <p>Pick a connection in the sidebar, or add one with +. Each opens here as its own terminal tab.</p>
+          </div>
+        )}
       </div>
-      {layout.portsOpen && <PortsPanel project={project} />}
+      {layout.portsOpen && !isSsh && <PortsPanel project={project} />}
     </div>
   );
 
@@ -38,8 +46,15 @@ export function ProjectView({ project }: { project: Project }) {
     <div className="project-view">
       <header className="project-header">
         <div className="project-title">
-          <span className="project-name">{project.name}</span>
-          <span className="project-path" title={project.path}>{project.path}</span>
+          <span className="project-name">
+            {project.name}
+            {branch && !isSsh && (
+              <span className="branch-chip" title="current git branch">
+                ⎇ {branch}
+              </span>
+            )}
+          </span>
+          <span className="project-path" title={project.path}>{isSsh ? "saved ssh / bastion connections" : project.path}</span>
         </div>
         <nav className="tabs">
           {project.terminals.map((t) => (
@@ -54,26 +69,32 @@ export function ProjectView({ project }: { project: Project }) {
           <button className="tab add" title="New terminal (⌘T)" onClick={() => void addTerminal(project.id)}>
             +
           </button>
-          <span className="tab-gap" />
-          <button className={layout.activeTab === CHANGES_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: CHANGES_TAB })}>
-            ⎇ changes{changed > 0 && <span className="count">{changed}</span>}
-          </button>
+          {!isSsh && (
+            <>
+              <span className="tab-gap" />
+              <button className={layout.activeTab === CHANGES_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: CHANGES_TAB })}>
+                ⎇ changes{changed > 0 && <span className="count">{changed}</span>}
+              </button>
+            </>
+          )}
         </nav>
         <div className="header-actions">
-          {editors[0] && (
+          {editors[0] && !isSsh && (
             <button onClick={() => void openInEditor(editors[0], project.path)} title={`Open this folder in ${editors[0]}`}>
               open in {editors[0].replace("Visual Studio Code", "VS Code")}
             </button>
           )}
-          <button className={layout.portsOpen ? "on" : ""} onClick={() => set({ portsOpen: !layout.portsOpen })} title="Toggle port monitor">
-            ports
-          </button>
+          {!isSsh && (
+            <button className={layout.portsOpen ? "on" : ""} onClick={() => set({ portsOpen: !layout.portsOpen })} title="Toggle port monitor">
+              ports
+            </button>
+          )}
           <button className="danger" onClick={() => void stop(project.id)} title="Stop all terminals of this project">
             stop
           </button>
         </div>
       </header>
-      <SavedCommandsBar project={project} />
+      {isSsh ? <ConnectionsBar /> : <SavedCommandsBar project={project} />}
       <div className="split">{mainContent}</div>
     </div>
   );
@@ -89,6 +110,7 @@ function TerminalTabButton({ project, tab, active, closable }: { project: Projec
   const agent = useStore((s) => s.monitor.agents[sid] ?? null);
   const attention = useStore((s) => sid in s.attention);
   const streaming = useStore((s) => Date.now() - (s.lastOutput[sid] ?? 0) < 3000);
+  const connecting = useStore((s) => s.connecting[sid] === "running");
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(tab.name);
 
@@ -127,6 +149,7 @@ function TerminalTabButton({ project, tab, active, closable }: { project: Projec
       <span className={"tab-dot" + (attention ? " attention" : streaming ? " streaming" : busy ? " busy" : "")} />
       {tab.name}
       {agent && <span className="tab-agent">{agent}</span>}
+      {connecting && <span className="tab-agent">auto-login…</span>}
       {closable && (
         <span
           className="tab-close"

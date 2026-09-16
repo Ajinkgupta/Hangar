@@ -65,6 +65,35 @@ fn notify(title: String, body: String, sound: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn security(args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new("security").args(args).output().map_err(|e| e.to_string())
+}
+
+/// Stores a secret in the macOS Keychain (generic password, account "hangar").
+#[tauri::command]
+fn secret_set(key: String, value: String) -> Result<(), String> {
+    let out = security(&["add-generic-password", "-a", "hangar", "-s", &key, "-w", &value, "-U"])?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn secret_get(key: String) -> Result<String, String> {
+    let out = security(&["find-generic-password", "-a", "hangar", "-s", &key, "-w"])?;
+    if !out.status.success() {
+        return Err(format!("no secret stored for {key}"));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string())
+}
+
+#[tauri::command]
+fn secret_delete(key: String) -> Result<(), String> {
+    let _ = security(&["delete-generic-password", "-a", "hangar", "-s", &key])?;
+    Ok(())
+}
+
 /// Menu-bar text: how many agents are waiting / running.
 #[tauri::command]
 fn tray_set_status(app: AppHandle, waiting: u32, running: u32) -> Result<(), String> {
@@ -199,6 +228,9 @@ pub fn run() {
             detect_editors,
             notify,
             tray_set_status,
+            secret_set,
+            secret_get,
+            secret_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hangar");

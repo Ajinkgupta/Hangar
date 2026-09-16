@@ -1,8 +1,10 @@
 import { create } from "zustand";
-import { config as configIpc, git, pty, type GitSummary, type MonitorSnapshot } from "./lib/ipc";
+import { b64encode, config as configIpc, git, pty, secrets, type GitSummary, type MonitorSnapshot } from "./lib/ipc";
+import { automation } from "./lib/automation";
 import type { SessionState } from "./lib/status";
 import {
   CHANGES_TAB,
+  SSH_PROJECT_ID,
   emptyConfig,
   newProject,
   nextTerminalName,
@@ -13,6 +15,8 @@ import {
   type Project,
   type ProjectLayout,
   type SavedCommand,
+  type Connection,
+  type ConnectionStep,
 } from "./lib/types";
 import { terminals } from "./lib/terminals";
 
@@ -37,6 +41,9 @@ export interface HangarState {
   view: "project" | "overview";
   paletteOpen: boolean;
   worktreeFor: string | null;
+  connectionEditor: Connection | "new" | null;
+  /** session id -> connection automation state for the UI */
+  connecting: Record<string, "running" | "done">;
 
   init: () => Promise<void>;
   addProject: (path: string) => Promise<void>;
@@ -72,6 +79,11 @@ export interface HangarState {
   setPaletteOpen: (v: boolean) => void;
   setWorktreeFor: (projectId: string | null) => void;
   addWorktree: (projectId: string, branch: string) => Promise<void>;
+
+  setConnectionEditor: (c: Connection | "new" | null) => void;
+  saveConnection: (c: Connection, plainSecrets: Record<number, string>) => Promise<void>;
+  removeConnection: (id: string) => Promise<void>;
+  runConnection: (id: string) => Promise<void>;
 }
 
 function patchProject(cfg: Config, id: string, fn: (p: Project) => Project): Config {
@@ -94,6 +106,8 @@ export const useStore = create<HangarState>((set, get) => ({
   view: "project",
   paletteOpen: false,
   worktreeFor: null,
+  connectionEditor: null,
+  connecting: {},
 
   init: async () => {
     const raw = await configIpc.load();
@@ -285,6 +299,70 @@ export const useStore = create<HangarState>((set, get) => ({
   setView: (view) => set({ view }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setWorktreeFor: (worktreeFor) => set({ worktreeFor }),
+  setConnectionEditor: (connectionEditor) => set({ connectionEditor }),
+
+  saveConnection: async (c, plainSecrets) => {
+    // Secrets never touch config.json: they go to the Keychain under a per-step key.
+    const steps: ConnectionStep[] = [];
+    for (let i = 0; i < c.steps.length; i++) {
+      const st = { ...c.steps[i] };
+      if (plainSecrets[i] !== undefined) {
+        const key = `hangar-conn-${c.id}-${i}`;
+        try {
+          await secrets.set(key, plainSecrets[i]);
+          st.secretRef = key;
+          st.send = "";
+        } catch (e) {
+          get().setError(`Keychain: ${e}`);
+          return;
+        }
+      }
+      steps.push(st);
+    }
+    const conn = { ...c, steps };
+    set((s) => {
+      const exists = s.config.connections.some((x) => x.id === conn.id);
+      const connections = exists ? s.config.connections.map((x) => (x.id === conn.id ? conn : x)) : [...s.config.connections, conn];
+      return { config: { ...s.config, connections }, connectionEditor: null };
+    });
+  },
+
+  removeConnection: async (id) => {
+    const c = get().config.connections.find((x) => x.id === id);
+    for (const st of c?.steps ?? []) if (st.secretRef) await secrets.delete(st.secretRef).catch(() => {});
+    set((s) => ({ config: { ...s.config, connections: s.config.connections.filter((x) => x.id !== id) }, connectionEditor: null }));
+  },
+
+  runConnection: async (id) => {
+    const c = get().config.connections.find((x) => x.id === id);
+    if (!c) return;
+    // Resolve secrets first so a Keychain failure stops before a terminal is opened.
+    const resolved: Array<ConnectionStep & { resolved: string }> = [];
+    for (const st of c.steps) {
+      let value = st.send;
+      if (st.secretRef) {
+        try {
+          value = await secrets.get(st.secretRef);
+        } catch (e) {
+          get().setError(`Could not read the saved password for "${c.name}": ${e}`);
+          return;
+        }
+      }
+      resolved.push({ ...st, resolved: value });
+    }
+    get().setActive(SSH_PROJECT_ID);
+    const terminalId = await get().addTerminal(SSH_PROJECT_ID, c.name);
+    if (!terminalId) return;
+    const sid = sessionId(SSH_PROJECT_ID, terminalId);
+    set((s) => ({ connecting: { ...s.connecting, [sid]: "running" } }));
+    automation.start(sid, resolved, {
+      onDone: () => set((s) => ({ connecting: { ...s.connecting, [sid]: "done" } })),
+    });
+    // Let the shell print its prompt before typing the command.
+    await new Promise((r) => setTimeout(r, 350));
+    pty.write(sid, b64encode(c.command + "\r")).catch((e) => get().setError(String(e)));
+  },
+
   addWorktree: async (projectId, branch) => {
     const project = get().config.projects.find((p) => p.id === projectId);
     if (!project) return;

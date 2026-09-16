@@ -5,6 +5,8 @@ import { EmptyState } from "./components/EmptyState";
 import { Overview } from "./components/Overview";
 import { CommandPalette } from "./components/CommandPalette";
 import { WorktreeDialog } from "./components/WorktreeDialog";
+import { ConnectionDialog } from "./components/ConnectionDialog";
+import { automation } from "./lib/automation";
 import { selectActiveProject, useStore } from "./store";
 import { daemonRestart, daemonStatus, detectEditors, git, monitorTick, notify, on, traySetStatus } from "./lib/ipc";
 import { terminalHooks, terminals } from "./lib/terminals";
@@ -20,6 +22,7 @@ export default function App() {
   const projectCount = useStore((s) => s.config.projects.length);
   const paletteOpen = useStore((s) => s.paletteOpen);
   const worktreeFor = useStore((s) => s.worktreeFor);
+  const connectionEditor = useStore((s) => s.connectionEditor);
   const startedRef = useRef(false);
 
   // Boot: load config, wire daemon events, ensure sessions.
@@ -32,6 +35,7 @@ export default function App() {
       on.ptyOutput((p) => {
         terminals.handleOutput(p.id, p.data);
         useStore.getState().noteOutput(p.id);
+        automation.feed(p.id, p.data);
       }),
     );
     unlisteners.push(on.ptyExit((p) => useStore.getState().setSession(p.id, { alive: false, exitCode: p.code })));
@@ -134,7 +138,7 @@ export default function App() {
         return;
       }
       if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
-        const target = s.config.projects[Number(e.key) - 1];
+        const target = s.config.projects.filter((p) => p.kind !== "ssh")[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
           s.setActive(target.id);
@@ -206,6 +210,7 @@ export default function App() {
       </main>
       {paletteOpen && <CommandPalette />}
       {worktreeFor && <WorktreeDialog projectId={worktreeFor} />}
+      {connectionEditor && <ConnectionDialog editing={connectionEditor} />}
     </div>
   );
 }

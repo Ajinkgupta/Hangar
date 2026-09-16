@@ -103,9 +103,14 @@ impl Session {
             .context("openpty")?;
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        let mut dir = if cwd == "~" || cwd.starts_with("~/") { cwd.replacen('~', &home, 1) } else { cwd.to_string() };
+        if !Path::new(&dir).is_dir() {
+            dir = home.clone();
+        }
         let mut cmd = CommandBuilder::new(&shell);
         cmd.arg("-il");
-        cmd.cwd(cwd);
+        cmd.cwd(&dir);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("HANGAR_SESSION", id);

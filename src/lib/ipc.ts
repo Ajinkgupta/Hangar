@@ -38,6 +38,11 @@ export const openUrl = (url: string) => invoke<void>("open_url", { url });
 export const openInEditor = (appName: string, path: string) => invoke<void>("open_in_editor", { appName, path });
 export const detectEditors = () => invoke<string[]>("detect_editors");
 export const notify = (title: string, body: string, sound: boolean) => invoke<void>("notify", { title, body, sound });
+export const secrets = {
+  set: (key: string, value: string) => invoke<void>("secret_set", { key, value }),
+  get: (key: string) => invoke<string>("secret_get", { key }),
+  delete: (key: string) => invoke<void>("secret_delete", { key }),
+};
 export const traySetStatus = (waiting: number, running: number) => invoke<void>("tray_set_status", { waiting, running });
 
 export const monitorTick = (sessionPids: Record<string, number>) =>
