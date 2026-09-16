@@ -134,6 +134,7 @@ export const useStore = create<HangarState>((set, get) => ({
     try {
       const pid = await pty.create(sid, project.path, 120, 30);
       get().setSession(sid, { alive: true, pid, exitCode: null });
+      terminals.resync(sid);
     } catch (e) {
       get().setError(String(e));
     }
@@ -187,6 +188,7 @@ export const useStore = create<HangarState>((set, get) => ({
       try {
         const pid = await pty.create(sid, project.path, 120, 30);
         get().setSession(sid, { alive: true, pid, exitCode: null });
+        terminals.resync(sid);
       } catch (e) {
         get().setError(`Could not start terminal "${t.name}" for ${project.name}: ${e}`);
       }

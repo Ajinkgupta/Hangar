@@ -202,6 +202,15 @@ export const terminals = {
 
   markRestarted(id: string) {
     entries.get(id)?.term.write(ENDED_MARKER);
+    terminals.resync(id);
+  },
+
+  /** A (re)created PTY starts at a default size; push the terminal's real size to it. */
+  resync(id: string) {
+    const e = entries.get(id);
+    if (!e) return;
+    e.lastSize = null;
+    requestAnimationFrame(() => terminals.fit(id));
   },
 
   destroy(id: string) {
