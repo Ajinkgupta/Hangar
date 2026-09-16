@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { deriveStatus, projectPort } from "../lib/status";
 import { CHANGES_TAB, sessionId, type Project } from "../lib/types";
@@ -6,7 +7,7 @@ import { openUrl, pty } from "../lib/ipc";
 
 /** Every project at a glance: status, agent, ports, changes, and the tail of its terminal. */
 export function Overview() {
-  const projects = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh"));
+  const projects = useStore(useShallow((s) => s.config.projects.filter((p) => p.kind !== "ssh")));
   return (
     <div className="overview">
       <header className="overview-header">
@@ -29,8 +30,10 @@ function ProjectCard({ project }: { project: Project }) {
   const status = useStore((s) => deriveStatus(project.id, s.sessions, s.monitor, s.attention));
   const port = useStore((s) => projectPort(project.id, s.monitor));
   const summary = useStore((s) => s.gitSummary[project.path]);
-  const agents = useStore((s) => Object.entries(s.monitor.agents).filter(([sid]) => sid.startsWith(project.id + ":")));
-  const attention = useStore((s) => Object.keys(s.attention).filter((sid) => sid.startsWith(project.id + ":")));
+  const agents = useStore(useShallow((s) => Object.entries(s.monitor.agents).filter(([sid]) => sid.startsWith(project.id + ":")).map(([sid, a]) => `${sid}=${a}`))).map(
+    (x) => x.split("=") as [string, string],
+  );
+  const attention = useStore(useShallow((s) => Object.keys(s.attention).filter((sid) => sid.startsWith(project.id + ":"))));
   const lastOutput = useStore((s) => s.lastOutput);
   const [tail, setTail] = useState<string[]>([]);
 

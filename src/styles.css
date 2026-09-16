@@ -260,3 +260,6 @@ button.small { font-size: 11px; padding: 2px 8px; }
 .cmd.running { border-color: rgba(74, 222, 128, 0.5); }
 .cmd.current { background: var(--bg-3); }
 .cmd .play.live { color: var(--green); animation: pulse 1.2s ease-in-out infinite; display: inline-block; }
+.crash { padding: 40px; max-width: 800px; display: flex; flex-direction: column; gap: 12px; }
+.crash pre { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 11px; white-space: pre-wrap; user-select: text; color: var(--red); }
+.crash button { align-self: flex-start; }

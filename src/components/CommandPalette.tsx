@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { CHANGES_TAB } from "../lib/types";
 
@@ -7,7 +8,7 @@ type Item = { key: string; label: string; hint: string; run: () => void };
 /** ⌘P: jump to any project or terminal by name. */
 export function CommandPalette() {
   const close = () => useStore.getState().setPaletteOpen(false);
-  const projects = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh"));
+  const projects = useStore(useShallow((s) => s.config.projects.filter((p) => p.kind !== "ssh")));
   const connections = useStore((s) => s.config.connections);
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);

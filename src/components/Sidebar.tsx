@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { deriveStatus, projectPort } from "../lib/status";
 import type { Project } from "../lib/types";
@@ -12,7 +13,7 @@ import { SSH_PROJECT_ID, type Connection } from "../lib/types";
 type Menu = { id: string; x: number; y: number };
 
 export function Sidebar() {
-  const projects = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh"));
+  const projects = useStore(useShallow((s) => s.config.projects.filter((p) => p.kind !== "ssh")));
   const activeId = useStore((s) => s.config.activeProjectId);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
