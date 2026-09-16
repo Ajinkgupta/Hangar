@@ -3,13 +3,14 @@ import { Sidebar } from "./components/Sidebar";
 import { ProjectView } from "./components/ProjectView";
 import { EmptyState } from "./components/EmptyState";
 import { selectActiveProject, useStore } from "./store";
-import { daemonStatus, monitorTick, on } from "./lib/ipc";
+import { daemonRestart, daemonStatus, monitorTick, on } from "./lib/ipc";
 import { terminals } from "./lib/terminals";
 import { CHANGES_TAB } from "./lib/types";
 
 export default function App() {
   const loaded = useStore((s) => s.loaded);
   const daemonConnected = useStore((s) => s.daemonConnected);
+  const daemonStale = useStore((s) => s.daemonStale);
   const lastError = useStore((s) => s.lastError);
   const active = useStore(selectActiveProject);
   const projectCount = useStore((s) => s.config.projects.length);
@@ -30,6 +31,7 @@ export default function App() {
       }),
     );
     unlisteners.push(on.daemonDisconnected(() => useStore.getState().setDaemonConnected(false)));
+    unlisteners.push(on.daemonBuild((p) => useStore.getState().setDaemonStale(p.stale)));
     void (async () => {
       await st.init();
       const connected = await daemonStatus().catch(() => false);
@@ -120,6 +122,17 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
+  // No native right-click menu outside text inputs (the terminal handles its own).
+  useEffect(() => {
+    const onCtx = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA") && !t.classList.contains("xterm-helper-textarea")) return;
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", onCtx);
+    return () => document.removeEventListener("contextmenu", onCtx);
+  }, []);
+
   if (!loaded) return <div className="boot">Loading…</div>;
 
   return (
@@ -127,6 +140,15 @@ export default function App() {
       <Sidebar />
       <main className="main">
         {!daemonConnected && <div className="banner warn">Reconnecting to session daemon…</div>}
+        {daemonConnected && daemonStale && (
+          <div className="banner warn">
+            The background session daemon is from an older Hangar build.{" "}
+            <button className="small" onClick={() => void daemonRestart().catch((e) => useStore.getState().setError(String(e)))}>
+              Restart daemon
+            </button>{" "}
+            <span className="hint">(ends current terminals; scrollback is kept)</span>
+          </div>
+        )}
         {lastError && (
           <div className="banner error" onClick={() => useStore.getState().setError(null)}>
             {lastError} <span className="dismiss">×</span>

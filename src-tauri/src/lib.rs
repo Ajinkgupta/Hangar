@@ -8,6 +8,19 @@ pub mod monitor;
 use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 
 
+/// Opens an http(s) link in the user's default browser (terminal link clicks).
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("only http(s) links can be opened".into());
+    }
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -74,12 +87,14 @@ pub fn run() {
             daemon_client::pty_kill,
             daemon_client::pty_forget,
             daemon_client::daemon_status,
+            daemon_client::daemon_restart,
             monitor::monitor_tick,
             monitor::kill_process,
             git::git_status,
             git::git_diff,
             config::config_load,
             config::config_save,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hangar");

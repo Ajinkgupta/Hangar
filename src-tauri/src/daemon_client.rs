@@ -34,6 +34,11 @@ struct OutputPayload {
     data: String,
 }
 #[derive(Serialize, Clone)]
+struct DaemonBuild {
+    stale: bool,
+    build: String,
+}
+#[derive(Serialize, Clone)]
 struct ExitPayload {
     id: String,
     code: Option<i32>,
@@ -88,6 +93,16 @@ pub async fn start(app: AppHandle) {
                 let pending: Pending = Default::default();
                 *conn_slot.lock().unwrap() = Some(Conn { tx, pending: pending.clone() });
                 let _ = app.emit("daemon:connected", ());
+                // Handshake: tell the UI if this daemon comes from a different Hangar build.
+                {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let st = app.state::<DaemonState>();
+                        if let Ok(ReplyBody::Pong { build, .. }) = st.request(Cmd::Ping).await {
+                            let _ = app.emit("daemon:build", DaemonBuild { stale: build != env!("HANGAR_BUILD_ID"), build });
+                        }
+                    });
+                }
 
                 let writer = tokio::spawn(async move {
                     while let Some(line) = rx.recv().await {
@@ -167,6 +182,12 @@ impl DaemonState {
 #[tauri::command]
 pub fn daemon_status(state: State<'_, DaemonState>) -> bool {
     state.is_connected()
+}
+
+/// Asks the (old) daemon to exit; the reconnect loop then spawns this build's daemon.
+#[tauri::command]
+pub async fn daemon_restart(state: State<'_, DaemonState>) -> Result<(), String> {
+    state.request(Cmd::Shutdown).await.map(|_| ())
 }
 
 #[tauri::command]

@@ -13,17 +13,21 @@ use tokio::sync::{broadcast, mpsc};
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
 
+/// Replay at most this much scrollback to a client (the full 2 MB lives on disk).
+const REPLAY_CAP: usize = 512 * 1024;
+
 #[derive(Clone)]
 pub struct Daemon {
     data_dir: PathBuf,
     sessions: Sessions,
     events: broadcast::Sender<Event>,
+    build: String,
 }
 
 impl Daemon {
-    pub fn new(data_dir: &Path) -> Self {
+    pub fn new(data_dir: &Path, build: &str) -> Self {
         let (events, _) = broadcast::channel(8192);
-        Self { data_dir: data_dir.to_path_buf(), sessions: Default::default(), events }
+        Self { data_dir: data_dir.to_path_buf(), sessions: Default::default(), events, build: build.to_string() }
     }
 
     pub fn handle(&self, req: Request) -> Reply {
@@ -36,7 +40,19 @@ impl Daemon {
 
     fn dispatch(&self, cmd: Cmd) -> Result<ReplyBody> {
         match cmd {
-            Cmd::Ping => Ok(ReplyBody::Pong { version: PROTOCOL_VERSION }),
+            Cmd::Ping => Ok(ReplyBody::Pong { version: PROTOCOL_VERSION, build: self.build.clone() }),
+            Cmd::Shutdown => {
+                let all: Vec<Session> = self.sessions.lock().unwrap().drain().map(|(_, s)| s).collect();
+                for s in all {
+                    s.kill();
+                }
+                let _ = std::fs::remove_file(crate::socket_path(&self.data_dir));
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    std::process::exit(0);
+                });
+                Ok(ReplyBody::Ok)
+            }
             Cmd::List => {
                 let s = self.sessions.lock().unwrap();
                 Ok(ReplyBody::Sessions { sessions: s.values().map(|x| x.info()).collect() })
@@ -72,11 +88,7 @@ impl Daemon {
                         std::fs::read(p).unwrap_or_default()
                     }
                 };
-                let tail = if data.len() > crate::session::SCROLLBACK_CAP {
-                    &data[data.len() - crate::session::SCROLLBACK_CAP..]
-                } else {
-                    &data[..]
-                };
+                let tail = if data.len() > REPLAY_CAP { &data[data.len() - REPLAY_CAP..] } else { &data[..] };
                 Ok(ReplyBody::Scrollback { id, data: b64(tail) })
             }
             Cmd::Write { id, data } => {
@@ -116,18 +128,18 @@ impl Daemon {
 }
 
 /// Blocking: binds the socket under `data_dir` and serves forever.
-pub fn run(data_dir: &Path) -> Result<()> {
+pub fn run(data_dir: &Path, build: &str) -> Result<()> {
     std::fs::create_dir_all(data_dir)?;
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(serve(data_dir, crate::socket_path(data_dir)))
+    rt.block_on(serve(data_dir, crate::socket_path(data_dir), build))
 }
 
-pub async fn serve(data_dir: &Path, sock: PathBuf) -> Result<()> {
+pub async fn serve(data_dir: &Path, sock: PathBuf, build: &str) -> Result<()> {
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock).with_context(|| format!("bind {}", sock.display()))?;
     std::fs::write(data_dir.join("hangard.pid"), std::process::id().to_string())?;
-    let daemon = Daemon::new(data_dir);
-    eprintln!("hangard listening on {}", sock.display());
+    let daemon = Daemon::new(data_dir, build);
+    eprintln!("hangard {build} listening on {}", sock.display());
     loop {
         let (stream, _) = listener.accept().await?;
         let d = daemon.clone();

@@ -33,6 +33,8 @@ pub enum Cmd {
     Resize { id: String, cols: u16, rows: u16 },
     Kill { id: String },
     Forget { id: String },
+    /// Kill every session and exit the daemon (used when a newer Hangar build replaces it).
+    Shutdown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,7 +59,11 @@ pub struct Reply {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "reply", rename_all = "snake_case")]
 pub enum ReplyBody {
-    Pong { version: u32 },
+    Pong {
+        version: u32,
+        #[serde(default)]
+        build: String,
+    },
     Sessions { sessions: Vec<SessionInfo> },
     Created { id: String, pid: u32 },
     Scrollback { id: String, data: String },
@@ -122,7 +128,7 @@ mod tests {
             ServerMessage::Reply(Reply { req: Some(3), body: ReplyBody::Ok })
         ));
         let m: ServerMessage = serde_json::from_str(r#"{"reply":"pong","version":1}"#).unwrap();
-        assert!(matches!(m, ServerMessage::Reply(Reply { body: ReplyBody::Pong { version: 1 }, .. })));
+        assert!(matches!(m, ServerMessage::Reply(Reply { body: ReplyBody::Pong { version: 1, .. }, .. })));
     }
 
     #[test]

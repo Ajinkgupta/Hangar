@@ -22,6 +22,7 @@ export interface HangarState {
   config: Config;
   loaded: boolean;
   daemonConnected: boolean;
+  daemonStale: boolean;
   sessions: Record<string, SessionState>;
   monitor: MonitorSnapshot;
   showAllPorts: boolean;
@@ -49,6 +50,7 @@ export interface HangarState {
   setMonitor: (m: MonitorSnapshot) => void;
   toggleShowAllPorts: () => void;
   setDaemonConnected: (v: boolean) => void;
+  setDaemonStale: (v: boolean) => void;
   setError: (e: string | null) => void;
 }
 
@@ -60,6 +62,7 @@ export const useStore = create<HangarState>((set, get) => ({
   config: emptyConfig(),
   loaded: false,
   daemonConnected: false,
+  daemonStale: false,
   sessions: {},
   monitor: EMPTY_MONITOR,
   showAllPorts: false,
@@ -165,7 +168,6 @@ export const useStore = create<HangarState>((set, get) => ({
     })),
 
   ensureSessions: async (project) => {
-    if (!get().daemonConnected) return;
     let live: Record<string, { pid: number; alive: boolean; exit_code: number | null }> = {};
     try {
       live = Object.fromEntries((await pty.list()).map((s) => [s.id, s]));
@@ -225,6 +227,7 @@ export const useStore = create<HangarState>((set, get) => ({
   setMonitor: (monitor) => set({ monitor }),
   toggleShowAllPorts: () => set((s) => ({ showAllPorts: !s.showAllPorts })),
   setDaemonConnected: (daemonConnected) => set({ daemonConnected }),
+  setDaemonStale: (daemonStale) => set({ daemonStale }),
   setError: (lastError) => set({ lastError }),
 }));
 

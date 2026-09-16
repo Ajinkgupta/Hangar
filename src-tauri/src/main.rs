@@ -2,7 +2,7 @@
 
 fn main() {
     if std::env::args().any(|a| a == "--daemon") {
-        if let Err(e) = hangard::run_default() {
+        if let Err(e) = hangard::run_default(env!("HANGAR_BUILD_ID")) {
             eprintln!("hangard failed: {e:#}");
             std::process::exit(1);
         }

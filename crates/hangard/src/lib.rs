@@ -21,7 +21,7 @@ pub fn socket_path(data_dir: &std::path::Path) -> PathBuf {
 }
 
 /// Blocking entry point used by `hangar --daemon`.
-pub fn run_default() -> anyhow::Result<()> {
+pub fn run_default(build: &str) -> anyhow::Result<()> {
     let data_dir = default_data_dir();
-    server::run(&data_dir)
+    server::run(&data_dir, build)
 }

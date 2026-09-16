@@ -56,6 +56,7 @@ export function Sidebar() {
       </DndContext>
       <div className="sidebar-footer">
         <AddProjectButton />
+        <DaemonIndicator />
       </div>
       {menu && (
         <ContextMenu
@@ -129,6 +130,17 @@ function ProjectItem({
       )}
       {port !== null && <span className="port-badge">:{port}</span>}
     </li>
+  );
+}
+
+function DaemonIndicator() {
+  const connected = useStore((s) => s.daemonConnected);
+  const count = useStore((s) => Object.values(s.sessions).filter((x) => x.alive).length);
+  return (
+    <div className="daemon-indicator" title="Background session daemon: keeps terminals alive when Hangar is closed">
+      <span className={"dot " + (connected ? "running" : "error")} />
+      {connected ? `daemon · ${count} terminal${count === 1 ? "" : "s"} alive` : "daemon offline"}
+    </div>
   );
 }
 

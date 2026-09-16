@@ -15,7 +15,7 @@ export function ChangesPane({ project }: { project: Project }) {
   const [diffs, setDiffs] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<string | null>(null);
 
-  // Poll status every 3s while mounted.
+  // Poll status every 5s while mounted (git status on a big repo is not free).
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -24,7 +24,7 @@ export function ChangesPane({ project }: { project: Project }) {
       const s = await git.status(project.path).catch((e) => ({ is_repo: true, files: [], error: String(e) }) as GitStatus);
       if (stopped) return;
       setStatus((prev) => (JSON.stringify(prev) === JSON.stringify(s) ? prev : s));
-      timer = setTimeout(tick, 3000);
+      timer = setTimeout(tick, 5000);
     };
     void tick();
     return () => {

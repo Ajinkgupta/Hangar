@@ -7,13 +7,15 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { b64decode, b64encode, pty } from "./ipc";
+import { SearchAddon } from "@xterm/addon-search";
+import { b64decode, b64encode, openUrl, pty } from "./ipc";
 
 const ENDED_MARKER = "\r\n\x1b[2m[hangar: previous session ended — new session started]\x1b[0m\r\n";
 
 type Entry = {
   term: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
   el: HTMLDivElement;
   opened: boolean;
   ready: boolean; // scrollback loaded; live output may be written directly
@@ -59,6 +61,13 @@ async function loadScrollback(id: string, e: Entry) {
   e.ready = true;
   for (const chunk of e.queue) e.term.write(b64decode(chunk));
   e.queue = [];
+  // Nudge: a size change makes full-screen programs (claude, vim, htop) repaint from
+  // scratch, so a replayed tail never leaves a garbled screen behind.
+  const { cols, rows } = e.term;
+  if (cols > 2 && rows > 1) {
+    pty.resize(id, cols - 1, rows).catch(() => {});
+    setTimeout(() => pty.resize(id, cols, rows).catch(() => {}), 60);
+  }
 }
 
 export const terminals = {
@@ -72,9 +81,10 @@ export const terminals = {
     if (!e) {
       const term = makeTerminal();
       const fit = new FitAddon();
+      const search = new SearchAddon();
       const el = document.createElement("div");
       el.className = "xterm-host";
-      e = { term, fit, el, opened: false, ready: false, queue: [], lastSize: null };
+      e = { term, fit, search, el, opened: false, ready: false, queue: [], lastSize: null };
       entries.set(id, e);
       term.onData((data) => {
         pty.write(id, b64encode(data)).catch(() => {});
@@ -109,7 +119,8 @@ export const terminals = {
     if (!e || e.opened || !e.el.isConnected || e.el.offsetParent === null) return;
     e.opened = true;
     e.term.loadAddon(e.fit);
-    e.term.loadAddon(new WebLinksAddon());
+    e.term.loadAddon(new WebLinksAddon((_ev, url) => void openUrl(url)));
+    e.term.loadAddon(e.search);
     const unicode = new Unicode11Addon();
     e.term.loadAddon(unicode);
     e.term.unicode.activeVersion = "11";
@@ -147,6 +158,18 @@ export const terminals = {
 
   focus(id: string) {
     entries.get(id)?.term.focus();
+  },
+
+  findNext(id: string, query: string) {
+    return entries.get(id)?.search.findNext(query, { incremental: false, caseSensitive: false }) ?? false;
+  },
+
+  findPrevious(id: string, query: string) {
+    return entries.get(id)?.search.findPrevious(query, { caseSensitive: false }) ?? false;
+  },
+
+  clearSearch(id: string) {
+    entries.get(id)?.search.clearDecorations();
   },
 
   handleOutput(id: string, data: string) {

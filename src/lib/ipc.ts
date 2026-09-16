@@ -26,6 +26,8 @@ export const pty = {
 };
 
 export const daemonStatus = () => invoke<boolean>("daemon_status");
+export const daemonRestart = () => invoke<void>("daemon_restart");
+export const openUrl = (url: string) => invoke<void>("open_url", { url });
 
 export const monitorTick = (sessionPids: Record<string, number>) =>
   invoke<MonitorSnapshot>("monitor_tick", { sessionPids });
@@ -49,6 +51,8 @@ export const on = {
     listen<{ id: string; code: number | null }>("pty:exit", (e) => cb(e.payload)),
   daemonConnected: (cb: () => void) => listen("daemon:connected", () => cb()),
   daemonDisconnected: (cb: () => void) => listen("daemon:disconnected", () => cb()),
+  daemonBuild: (cb: (p: { stale: boolean; build: string }) => void) =>
+    listen<{ stale: boolean; build: string }>("daemon:build", (e) => cb(e.payload)),
 };
 
 export function b64encode(s: string): string {

@@ -67,11 +67,11 @@ async fn create_write_scrollback_kill_and_restart_keeps_history() {
     let sock = std::path::PathBuf::from(format!("/tmp/hangard-test-{}.sock", std::process::id()));
 
     let d1 = { let (data, sock) = (data.clone(), sock.clone());
-        tokio::spawn(async move { hangard::server::serve(&data, sock).await.unwrap() }) };
+        tokio::spawn(async move { hangard::server::serve(&data, sock, "test").await.unwrap() }) };
     let mut c = Client::connect(&sock).await;
 
     let r = c.send(Cmd::Ping).await;
-    assert!(matches!(c.reply(r).await, ReplyBody::Pong { version: 1 }));
+    assert!(matches!(c.reply(r).await, ReplyBody::Pong { version: 1, .. }));
 
     let r = c.send(Cmd::Create { id: "p:shell".into(), cwd: "/tmp".into(), cols: 80, rows: 24,
         initial_command: Some("echo hangar-ok-$((20+22))".into()) }).await;
@@ -103,7 +103,7 @@ async fn create_write_scrollback_kill_and_restart_keeps_history() {
     d1.abort();
     let _ = std::fs::remove_file(&sock);
     let _d2 = { let (data, sock) = (data.clone(), sock.clone());
-        tokio::spawn(async move { hangard::server::serve(&data, sock).await.unwrap() }) };
+        tokio::spawn(async move { hangard::server::serve(&data, sock, "test").await.unwrap() }) };
     let mut c = Client::connect(&sock).await;
     let r = c.send(Cmd::Create { id: "p:shell".into(), cwd: "/tmp".into(), cols: 80, rows: 24, initial_command: None }).await;
     assert!(matches!(c.reply(r).await, ReplyBody::Created { .. }));
