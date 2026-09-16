@@ -255,7 +255,11 @@ pub fn kill_process(pid: u32, force: bool) -> Result<(), String> {
     let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
     let rc = unsafe { libc::kill(pid as i32, sig) };
     if rc != 0 {
-        return Err(format!("kill failed: {}", std::io::Error::last_os_error()));
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(()); // already gone; the next monitor tick drops the row
+        }
+        return Err(format!("kill failed: {err}"));
     }
     Ok(())
 }

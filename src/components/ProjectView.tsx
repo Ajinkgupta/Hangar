@@ -5,14 +5,12 @@ import { TerminalPane } from "./TerminalPane";
 import { SavedCommandsBar } from "./SavedCommandsBar";
 import { PortsPanel } from "./PortsPanel";
 import { ChangesPane } from "./ChangesPane";
-import { openInEditor } from "../lib/ipc";
 import { ConnectionsBar } from "./ConnectionsBar";
 
 export function ProjectView({ project }: { project: Project }) {
   const updateLayout = useStore((s) => s.updateLayout);
   const stop = useStore((s) => s.stopSessions);
   const addTerminal = useStore((s) => s.addTerminal);
-  const editors = useStore((s) => s.editors);
   const changed = useStore((s) => s.gitSummary[project.path]?.files ?? 0);
   const branch = useStore((s) => s.gitSummary[project.path]?.branch ?? "");
   const { layout } = project;
@@ -79,11 +77,6 @@ export function ProjectView({ project }: { project: Project }) {
           )}
         </nav>
         <div className="header-actions">
-          {editors[0] && !isSsh && (
-            <button onClick={() => void openInEditor(editors[0], project.path)} title={`Open this folder in ${editors[0]}`}>
-              open in {editors[0].replace("Visual Studio Code", "VS Code")}
-            </button>
-          )}
           {!isSsh && (
             <button className={layout.portsOpen ? "on" : ""} onClick={() => set({ portsOpen: !layout.portsOpen })} title="Toggle port monitor">
               ports

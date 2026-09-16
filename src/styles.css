@@ -100,14 +100,16 @@ input:focus { border-color: var(--accent); }
 .empty p { max-width: 420px; }
 
 .project-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.project-header { display: flex; align-items: center; gap: 16px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
-.project-title { display: flex; flex-direction: column; min-width: 0; max-width: 320px; }
-.project-name { font-weight: 600; }
+.project-header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-2); min-width: 0; }
+.project-title { display: flex; flex-direction: column; min-width: 0; max-width: 260px; flex: none; }
+.project-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-path { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
-.tabs { display: flex; gap: 2px; background: var(--bg); padding: 3px; border-radius: 8px; }
-.tab { background: transparent; border-color: transparent; color: var(--fg-muted); padding: 4px 14px; font-family: var(--mono); }
+.tabs { display: flex; gap: 2px; background: var(--bg); padding: 3px; border-radius: 8px; min-width: 0; overflow-x: auto; flex: 0 1 auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { background: transparent; border-color: transparent; color: var(--fg-muted); padding: 4px 12px; font-family: var(--mono); white-space: nowrap; flex: none; }
 .tab.active { background: var(--bg-3); color: var(--fg); border-color: var(--border); }
-.header-actions { margin-left: auto; display: flex; gap: 6px; }
+.header-actions { margin-left: auto; display: flex; gap: 6px; flex: none; }
+.header-actions button { white-space: nowrap; }
 
 .commands-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--border); position: relative; flex-wrap: wrap; }
 .commands { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
