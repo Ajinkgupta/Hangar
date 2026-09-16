@@ -6,8 +6,13 @@ Status: approved direction (Tauri + Rust, background daemon for persistence)
 ## 1. Summary
 
 Hangar is a local macOS app: one persistent terminal pair per project (a `claude`
-PTY and a `shell` PTY), a live port/process monitor with one-click kill, and an
-embedded WKWebView preview, all switchable from a sidebar. It does not edit code.
+PTY and a `shell` PTY), a live port/process monitor with one-click kill, an
+embedded WKWebView preview, and a read-only GitHub-style diff of the project's
+working tree, all switchable from a sidebar. It does not edit code.
+
+Additions after the PRD (user request 2026-09-16): a per-project **Changes** tab
+showing `git status` + red/green diffs like GitHub's PR view. Deliverable includes a
+built, unsigned `Hangar.app` and `.dmg`.
 
 The PRD (see conversation, 2026-09-16) is the requirements source. This spec
 records the architecture and the decisions needed to build it end-to-end.
@@ -26,6 +31,8 @@ records the architecture and the decisions needed to build it end-to-end.
 | Embedded browser | Tauri child webview (multi-webview, `unstable` feature) per project, shown/hidden, positioned over a placeholder div | Real WKWebView; iframes are blocked/mixed-content-fragile |
 | Config | `~/Library/Application Support/hangar/config.json` | Fully local |
 | Claude launch | `claude` typed into the claude PTY when the session is first created | PRD: auto-launch at add time; command is editable per project |
+| Diff data | Shell out to `git` (`status --porcelain=v1 -z`, `diff --no-color HEAD -- <file>`, `diff --no-index /dev/null <file>` for untracked) | No libgit2 build dependency; output parsed in TypeScript |
+| Distribution | `tauri build` with `bundle.targets = ["app","dmg"]`, ad-hoc signed | User wants an installable .app/.dmg; no Apple Developer signing |
 
 ## 3. Process model
 
@@ -109,6 +116,10 @@ Modules and commands (all `#[tauri::command]`, async where they hit the socket):
   webview `on_navigation`/page-load hooks so the address bar tracks redirects.
   Window layout: a `Window` with two kinds of children — `ui` (the React app,
   `auto_resize`) and the browser webviews positioned by the frontend.
+- **git** — `git_status(path) -> [{path, status: "M"|"A"|"D"|"R"|"?"|"C", staged: bool}]`
+  and `git_diff(path, file, untracked: bool) -> String` (raw unified diff). Returns
+  `is_repo: false` when the folder is not a git work tree. Uses `git` from PATH with
+  `-c core.quotepath=false`; 5 s timeout per call.
 - **config** — `config_load() -> serde_json::Value`, `config_save(value)`; atomic
   write (temp file + rename). Schema owned by the frontend (below).
 - **dialog** — folder picker via `tauri-plugin-dialog`.
@@ -132,7 +143,8 @@ type Project = {
   claudeCommand: string;        // default "claude"
   commands: { id: string; label: string; command: string }[];
   layout: {
-    activeTab: "claude" | "shell";
+    activeTab: "claude" | "shell" | "changes";
+    diffView: "unified" | "split";
     browserOpen: boolean;
     splitDirection: "horizontal" | "vertical";   // browser beside / below terminal
     splitRatio: number;                          // 0.2–0.8, terminal share
@@ -141,14 +153,15 @@ type Project = {
   };
 };
 ```
-Defaults: commands `[]`, layout `{activeTab:"claude", browserOpen:false,
-splitDirection:"horizontal", splitRatio:0.6, portsOpen:true, browserUrl:null}`.
+Defaults: commands `[]`, layout `{activeTab:"claude", diffView:"unified",
+browserOpen:false, splitDirection:"horizontal", splitRatio:0.6, portsOpen:true,
+browserUrl:null}`.
 Saves are debounced 300 ms; every mutation goes through the store.
 
 ### Components
 - **Sidebar** — project list (drag to reorder, right-click → Rename / Stop sessions /
   Remove), "+ Add project" (folder picker or paste-path input). Status dot per project.
-- **ProjectView** — for the active project: tab strip (`claude` | `shell`),
+- **ProjectView** — for the active project: tab strip (`claude` | `shell` | `changes`),
   SavedCommandsBar, split layout of TerminalPane and BrowserPane, PortsPanel toggle.
 - **TerminalPane** — one xterm instance per session, all kept mounted (hidden via
   `display:none` when inactive) so switching is instant; `fit()` on show/resize;
@@ -161,6 +174,13 @@ Saves are debounced 300 ms; every mutation goes through the store.
   / "All"; conflict rows highlighted; Kill button (Kill → confirm-free SIGTERM;
   a second click within 5 s while still alive sends SIGKILL). Polls `monitor_tick`
   every 2 s while the window is focused/visible.
+- **ChangesPane** — left: file list from `git_status` (status letter, path, +/- line
+  counts once a diff is loaded); right: the selected file's diff rendered GitHub-style —
+  hunk headers, old/new line numbers, green `+` rows, red `-` rows, grey context, with a
+  Unified/Split toggle. Untracked files render as all-added. Polls `git_status` every
+  3 s while the tab is visible, re-fetches the open file's diff when its status entry
+  changes. Non-repo folders show "Not a git repository". Read-only: no staging,
+  committing, or editing.
 - **BrowserPane** — toolbar (back, forward, reload, address input, split-direction
   toggle, close) and a placeholder div; a `ResizeObserver` on the div drives
   `browser_set_bounds`. Address defaults to `http://localhost:<lowest port owned by
@@ -199,8 +219,11 @@ Saves are debounced 300 ms; every mutation goes through the store.
   with `initial_command="echo hangar-ok"`, assert `output` contains `hangar-ok`, `kill`,
   restart the daemon, `create` the same id, assert `scrollback` includes the earlier text
   and the marker line.
+- **Rust unit**: `git status --porcelain -z` parser (renames, untracked, staged vs
+  unstaged), non-repo detection.
 - **Frontend unit** (vitest): store reducers (add/remove/reorder/layout), status-dot
-  derivation, default browser URL selection, saved-command editing.
+  derivation, default browser URL selection, saved-command editing, unified-diff parser
+  (hunks, line numbers, no-newline-at-EOF marker, binary files).
 - **Manual E2E** via `npm run tauri dev`: add two projects, run `npm run dev` in one,
   see its port attributed, preview it, quit and relaunch, confirm reattachment.
 
@@ -216,4 +239,5 @@ hangar/
 
 ## 10. Out of scope (per PRD non-goals)
 Code editing, SSH/remote sessions, general browsing (tabs, bookmarks, extensions),
-Windows/Linux support, code signing/notarization for distribution.
+Windows/Linux support, Apple Developer code signing/notarization, git write
+operations (stage/commit/checkout), commit history browsing.
