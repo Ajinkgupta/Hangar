@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store";
 import { terminals } from "../lib/terminals";
-import { sessionId, type Project, type SessionKind } from "../lib/types";
+import { sessionId, type Project, type TerminalTab } from "../lib/types";
 
-export function TerminalPane({ project, kind, visible }: { project: Project; kind: SessionKind; visible: boolean }) {
-  const id = sessionId(project.id, kind);
+export function TerminalPane({ project, tab, visible }: { project: Project; tab: TerminalTab; visible: boolean }) {
+  const id = sessionId(project.id, tab.id);
   const hostRef = useRef<HTMLDivElement>(null);
   const session = useStore((s) => s.sessions[id]);
   const restart = useStore((s) => s.restartSession);
@@ -47,8 +47,8 @@ export function TerminalPane({ project, kind, visible }: { project: Project; kin
           <div>
             Session ended{session.exitCode !== null ? ` (exit code ${session.exitCode})` : ""}.
           </div>
-          <button className="primary" disabled={!daemonConnected} onClick={() => void restart(project.id, kind)}>
-            Restart {kind}
+          <button className="primary" disabled={!daemonConnected} onClick={() => void restart(project.id, tab.id)}>
+            Restart terminal
           </button>
         </div>
       )}

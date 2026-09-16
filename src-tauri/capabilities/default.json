@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "ui",
-  "description": "Permissions for the Hangar UI webview only (browser preview webviews get nothing)",
-  "webviews": ["ui"],
+  "identifier": "main",
+  "description": "Permissions for the Hangar window",
+  "windows": ["main"],
   "permissions": ["core:default", "dialog:allow-open"]
 }

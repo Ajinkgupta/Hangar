@@ -5,6 +5,8 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { b64decode, b64encode, pty } from "./ipc";
 
 const ENDED_MARKER = "\r\n\x1b[2m[hangar: previous session ended — new session started]\x1b[0m\r\n";
@@ -77,6 +79,18 @@ export const terminals = {
       term.onData((data) => {
         pty.write(id, b64encode(data)).catch(() => {});
       });
+      // Cmd+C copies the selection (like VS Code); everything else goes to the shell.
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.type === "keydown" && ev.metaKey && ev.key === "c" && term.hasSelection()) {
+          void navigator.clipboard.writeText(term.getSelection());
+          return false;
+        }
+        if (ev.type === "keydown" && ev.metaKey && ev.key === "k") {
+          term.clear();
+          return false;
+        }
+        return true;
+      });
       term.onBinary((data) => {
         pty.write(id, btoa(data)).catch(() => {});
       });
@@ -86,7 +100,17 @@ export const terminals = {
       e.opened = true;
       e.term.loadAddon(e.fit);
       e.term.loadAddon(new WebLinksAddon());
+      const unicode = new Unicode11Addon();
+      e.term.loadAddon(unicode);
+      e.term.unicode.activeVersion = "11";
       e.term.open(e.el);
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        e.term.loadAddon(webgl);
+      } catch {
+        /* fall back to the DOM renderer */
+      }
       void loadScrollback(id, e);
     }
     return e;

@@ -1,23 +1,21 @@
-export type Tab = "claude" | "shell" | "changes";
-export type SessionKind = "claude" | "shell";
+/** Active tab is either a terminal id or the special "changes" view. */
+export type Tab = string;
+export const CHANGES_TAB = "changes";
 
 export type SavedCommand = { id: string; label: string; command: string };
+export type TerminalTab = { id: string; name: string };
 
 export type ProjectLayout = {
   activeTab: Tab;
   diffView: "unified" | "split";
-  browserOpen: boolean;
-  splitDirection: "horizontal" | "vertical";
-  splitRatio: number;
   portsOpen: boolean;
-  browserUrl: string | null;
 };
 
 export type Project = {
   id: string;
   name: string;
   path: string;
-  claudeCommand: string;
+  terminals: TerminalTab[];
   commands: SavedCommand[];
   layout: ProjectLayout;
 };
@@ -29,13 +27,9 @@ export type Config = {
 };
 
 export const defaultLayout = (): ProjectLayout => ({
-  activeTab: "claude",
+  activeTab: "",
   diffView: "unified",
-  browserOpen: false,
-  splitDirection: "horizontal",
-  splitRatio: 0.6,
   portsOpen: true,
-  browserUrl: null,
 });
 
 export const emptyConfig = (): Config => ({ version: 1, projects: [], activeProjectId: null });
@@ -49,19 +43,34 @@ export function uid(): string {
   return crypto.randomUUID();
 }
 
+export const defaultCommands = (): SavedCommand[] => [
+  { id: uid(), label: "claude", command: "claude" },
+  { id: uid(), label: "claude --resume", command: "claude --resume" },
+];
+
 export function newProject(path: string): Project {
+  const first: TerminalTab = { id: uid().slice(0, 8), name: "main" };
   return {
     id: uid(),
     name: basename(path),
     path,
-    claudeCommand: "claude",
-    commands: [],
-    layout: defaultLayout(),
+    terminals: [first],
+    commands: defaultCommands(),
+    layout: { ...defaultLayout(), activeTab: first.id },
   };
 }
 
-export function sessionId(projectId: string, kind: SessionKind): string {
-  return `${projectId}:${kind}`;
+export function sessionId(projectId: string, terminalId: string): string {
+  return `${projectId}:${terminalId}`;
+}
+
+/** Next unused "terminal N" name. */
+export function nextTerminalName(existing: TerminalTab[]): string {
+  const taken = new Set(existing.map((t) => t.name));
+  for (let i = existing.length + 1; ; i++) {
+    const n = `term ${i}`;
+    if (!taken.has(n)) return n;
+  }
 }
 
 export function projectOfSession(sessionId: string): string {
@@ -77,14 +86,28 @@ export function normalizeConfig(raw: unknown): Config {
     version: 1,
     projects: projects
       .filter((p): p is Project => !!p && typeof p === "object" && typeof (p as Project).path === "string")
-      .map((p) => ({
-        id: p.id || uid(),
-        name: p.name || basename(p.path),
-        path: p.path,
-        claudeCommand: p.claudeCommand || "claude",
-        commands: Array.isArray(p.commands) ? p.commands : [],
-        layout: { ...defaultLayout(), ...(p.layout || {}) },
-      })),
+      .map((p) => {
+        const terminals: TerminalTab[] =
+          Array.isArray(p.terminals) && p.terminals.length ? p.terminals : [{ id: uid().slice(0, 8), name: "main" }];
+        const raw = (p.layout || {}) as Partial<ProjectLayout>;
+        const layout: ProjectLayout = {
+          ...defaultLayout(),
+          ...(raw.activeTab !== undefined ? { activeTab: raw.activeTab } : {}),
+          ...(raw.diffView === "split" || raw.diffView === "unified" ? { diffView: raw.diffView } : {}),
+          ...(typeof raw.portsOpen === "boolean" ? { portsOpen: raw.portsOpen } : {}),
+        };
+        if (layout.activeTab !== CHANGES_TAB && !terminals.some((t) => t.id === layout.activeTab)) {
+          layout.activeTab = terminals[0].id;
+        }
+        return {
+          id: p.id || uid(),
+          name: p.name || basename(p.path),
+          path: p.path,
+          terminals,
+          commands: Array.isArray(p.commands) ? p.commands : defaultCommands(),
+          layout,
+        };
+      }),
     activeProjectId: typeof r.activeProjectId === "string" ? r.activeProjectId : null,
   };
 }

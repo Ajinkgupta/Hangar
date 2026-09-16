@@ -37,7 +37,7 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-title">Hangar</div>
+      <div className="sidebar-title"><img src="/logo.svg" alt="" className="logo" /> Hangar</div>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
           <ul className="project-list">

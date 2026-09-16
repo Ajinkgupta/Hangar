@@ -1,30 +1,16 @@
 //! Hangar app backend. `run()` builds the Tauri app; `--daemon` is handled in main.rs.
 
-pub mod browser;
 pub mod config;
 pub mod daemon_client;
 pub mod git;
 pub mod monitor;
 
-use tauri::{LogicalPosition, WebviewBuilder, WebviewUrl};
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(daemon_client::DaemonState::default())
-        .manage(browser::BrowserState::default())
         .setup(|app| {
-            let window = tauri::window::WindowBuilder::new(app, "main")
-                .title("Hangar")
-                .inner_size(1440.0, 900.0)
-                .min_inner_size(900.0, 600.0)
-                .build()?;
-            let size = window.inner_size()?;
-            window.add_child(
-                WebviewBuilder::new("ui", WebviewUrl::default()).auto_resize(),
-                LogicalPosition::new(0.0, 0.0),
-                size,
-            )?;
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 daemon_client::start(handle).await;
@@ -46,14 +32,6 @@ pub fn run() {
             git::git_diff,
             config::config_load,
             config::config_save,
-            browser::browser_show,
-            browser::browser_hide,
-            browser::browser_navigate,
-            browser::browser_back,
-            browser::browser_forward,
-            browser::browser_reload,
-            browser::browser_set_bounds,
-            browser::browser_destroy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hangar");

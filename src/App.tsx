@@ -5,7 +5,6 @@ import { EmptyState } from "./components/EmptyState";
 import { selectActiveProject, useStore } from "./store";
 import { daemonStatus, monitorTick, on } from "./lib/ipc";
 import { terminals } from "./lib/terminals";
-import { sessionId } from "./lib/types";
 
 export default function App() {
   const loaded = useStore((s) => s.loaded);
@@ -50,12 +49,8 @@ export default function App() {
       if (document.visibilityState === "visible") {
         const s = useStore.getState();
         const pids: Record<string, number> = {};
-        for (const p of s.config.projects) {
-          for (const kind of ["claude", "shell"] as const) {
-            const sid = sessionId(p.id, kind);
-            const sess = s.sessions[sid];
-            if (sess?.alive && sess.pid) pids[sid] = sess.pid;
-          }
+        for (const [sid, sess] of Object.entries(s.sessions)) {
+          if (sess.alive && sess.pid) pids[sid] = sess.pid;
         }
         try {
           s.setMonitor(await monitorTick(pids));

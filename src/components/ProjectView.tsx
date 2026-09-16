@@ -1,43 +1,27 @@
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { useState } from "react";
 import { useStore } from "../store";
-import { sessionId, type Project, type Tab } from "../lib/types";
+import { CHANGES_TAB, sessionId, type Project, type TerminalTab } from "../lib/types";
 import { TerminalPane } from "./TerminalPane";
 import { SavedCommandsBar } from "./SavedCommandsBar";
 import { PortsPanel } from "./PortsPanel";
-import { BrowserPane } from "./BrowserPane";
 import { ChangesPane } from "./ChangesPane";
-import { projectPort } from "../lib/status";
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "claude", label: "claude" },
-  { id: "shell", label: "shell" },
-  { id: "changes", label: "changes" },
-];
 
 export function ProjectView({ project }: { project: Project }) {
   const updateLayout = useStore((s) => s.updateLayout);
   const stop = useStore((s) => s.stopSessions);
-  const port = useStore((s) => projectPort(project.id, s.monitor));
+  const addTerminal = useStore((s) => s.addTerminal);
   const { layout } = project;
   const set = (patch: Parameters<typeof updateLayout>[1]) => updateLayout(project.id, patch);
-  const sid = (kind: "claude" | "shell") => sessionId(project.id, kind);
-
-  const openBrowser = () => {
-    const patch: Partial<typeof layout> = { browserOpen: !layout.browserOpen };
-    if (!layout.browserOpen && !layout.browserUrl && port !== null) patch.browserUrl = `http://localhost:${port}`;
-    set(patch);
-  };
 
   const mainContent = (
     <div className="main-panel">
       <div className="tab-content">
-        <div className="tab-pane" style={{ display: layout.activeTab === "claude" ? "flex" : "none" }}>
-          <TerminalPane project={project} kind="claude" visible={layout.activeTab === "claude"} />
-        </div>
-        <div className="tab-pane" style={{ display: layout.activeTab === "shell" ? "flex" : "none" }}>
-          <TerminalPane project={project} kind="shell" visible={layout.activeTab === "shell"} />
-        </div>
-        {layout.activeTab === "changes" && (
+        {project.terminals.map((t) => (
+          <div key={t.id} className="tab-pane" style={{ display: layout.activeTab === t.id ? "flex" : "none" }}>
+            <TerminalPane project={project} tab={t} visible={layout.activeTab === t.id} />
+          </div>
+        ))}
+        {layout.activeTab === CHANGES_TAB && (
           <div className="tab-pane">
             <ChangesPane project={project} />
           </div>
@@ -55,54 +39,92 @@ export function ProjectView({ project }: { project: Project }) {
           <span className="project-path" title={project.path}>{project.path}</span>
         </div>
         <nav className="tabs">
-          {TABS.map((t) => (
-            <button key={t.id} className={layout.activeTab === t.id ? "tab active" : "tab"} onClick={() => set({ activeTab: t.id })}>
-              {t.label}
-            </button>
+          {project.terminals.map((t) => (
+            <TerminalTabButton
+              key={t.id}
+              project={project}
+              tab={t}
+              active={layout.activeTab === t.id}
+              closable={project.terminals.length > 1}
+            />
           ))}
+          <button className="tab add" title="New terminal (⌘T)" onClick={() => void addTerminal(project.id)}>
+            +
+          </button>
+          <span className="tab-gap" />
+          <button className={layout.activeTab === CHANGES_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: CHANGES_TAB })}>
+            ⎇ changes
+          </button>
         </nav>
         <div className="header-actions">
           <button className={layout.portsOpen ? "on" : ""} onClick={() => set({ portsOpen: !layout.portsOpen })} title="Toggle port monitor">
             ports
           </button>
-          <button className={layout.browserOpen ? "on" : ""} onClick={openBrowser} title="Toggle browser preview">
-            browser{port !== null ? ` :${port}` : ""}
-          </button>
-          <button
-            onClick={() => set({ splitDirection: layout.splitDirection === "horizontal" ? "vertical" : "horizontal" })}
-            title="Browser beside / below terminal"
-            disabled={!layout.browserOpen}
-          >
-            {layout.splitDirection === "horizontal" ? "⇔" : "⇕"}
-          </button>
-          <button className="danger" onClick={() => void stop(project.id)} title="Stop both terminal sessions">
+          <button className="danger" onClick={() => void stop(project.id)} title="Stop all terminals of this project">
             stop
           </button>
         </div>
       </header>
-      <SavedCommandsBar project={project} shellSessionId={sid("shell")} />
-      {layout.browserOpen ? (
-        <Group
-          key={layout.splitDirection}
-          orientation={layout.splitDirection}
-          className="split"
-          defaultLayout={{ main: layout.splitRatio * 100, browser: (1 - layout.splitRatio) * 100 }}
-          onLayoutChanged={(l) => {
-            const r = (l.main ?? 60) / 100;
-            if (Math.abs(r - layout.splitRatio) > 0.005) set({ splitRatio: Math.min(0.8, Math.max(0.2, r)) });
+      <SavedCommandsBar project={project} />
+      <div className="split">{mainContent}</div>
+    </div>
+  );
+}
+
+function TerminalTabButton({ project, tab, active, closable }: { project: Project; tab: TerminalTab; active: boolean; closable: boolean }) {
+  const updateLayout = useStore((s) => s.updateLayout);
+  const closeTerminal = useStore((s) => s.closeTerminal);
+  const renameTerminal = useStore((s) => s.renameTerminal);
+  const session = useStore((s) => s.sessions[sessionId(project.id, tab.id)]);
+  const busy = useStore((s) => (s.monitor.activity[sessionId(project.id, tab.id)] ?? 0) > 0);
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(tab.name);
+
+  if (renaming) {
+    const commit = () => {
+      renameTerminal(project.id, tab.id, name);
+      setRenaming(false);
+    };
+    return (
+      <input
+        className="tab-rename"
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setRenaming(false);
+        }}
+      />
+    );
+  }
+  return (
+    <button
+      className={"tab" + (active ? " active" : "") + (session && !session.alive ? " dead" : "")}
+      onClick={() => updateLayout(project.id, { activeTab: tab.id })}
+      onDoubleClick={() => {
+        setName(tab.name);
+        setRenaming(true);
+      }}
+      onAuxClick={(e) => {
+        if (e.button === 1 && closable) void closeTerminal(project.id, tab.id);
+      }}
+      title="double-click to rename · middle-click to close"
+    >
+      <span className={"tab-dot" + (busy ? " busy" : "")} />
+      {tab.name}
+      {closable && (
+        <span
+          className="tab-close"
+          onClick={(e) => {
+            e.stopPropagation();
+            void closeTerminal(project.id, tab.id);
           }}
         >
-          <Panel id="main" minSize="20">
-            {mainContent}
-          </Panel>
-          <Separator className="separator" />
-          <Panel id="browser" minSize="20">
-            <BrowserPane project={project} />
-          </Panel>
-        </Group>
-      ) : (
-        <div className="split">{mainContent}</div>
+          ×
+        </span>
       )}
-    </div>
+    </button>
   );
 }

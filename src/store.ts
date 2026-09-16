@@ -2,15 +2,17 @@ import { create } from "zustand";
 import { config as configIpc, pty, type MonitorSnapshot } from "./lib/ipc";
 import type { SessionState } from "./lib/status";
 import {
+  CHANGES_TAB,
   emptyConfig,
   newProject,
+  nextTerminalName,
   normalizeConfig,
   sessionId,
+  uid,
   type Config,
   type Project,
   type ProjectLayout,
   type SavedCommand,
-  type SessionKind,
 } from "./lib/types";
 import { terminals } from "./lib/terminals";
 
@@ -33,12 +35,15 @@ export interface HangarState {
   setActive: (id: string | null) => void;
   updateLayout: (id: string, patch: Partial<ProjectLayout>) => void;
   setCommands: (id: string, commands: SavedCommand[]) => void;
-  setClaudeCommand: (id: string, cmd: string) => void;
+
+  addTerminal: (projectId: string, name?: string) => Promise<string>;
+  closeTerminal: (projectId: string, terminalId: string) => Promise<void>;
+  renameTerminal: (projectId: string, terminalId: string, name: string) => void;
 
   ensureSessions: (project: Project) => Promise<void>;
   ensureAllSessions: () => Promise<void>;
   stopSessions: (id: string) => Promise<void>;
-  restartSession: (projectId: string, kind: SessionKind) => Promise<void>;
+  restartSession: (projectId: string, terminalId: string) => Promise<void>;
   setSession: (id: string, patch: Partial<SessionState>) => void;
 
   setMonitor: (m: MonitorSnapshot) => void;
@@ -76,19 +81,19 @@ export const useStore = create<HangarState>((set, get) => ({
   },
 
   removeProject: async (id) => {
+    const project = get().config.projects.find((p) => p.id === id);
+    if (!project) return;
     const wasActive = get().config.activeProjectId === id;
     set((s) => {
       const projects = s.config.projects.filter((p) => p.id !== id);
-      const sessions = { ...s.sessions };
-      delete sessions[sessionId(id, "claude")];
-      delete sessions[sessionId(id, "shell")];
+      const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([sid]) => !sid.startsWith(id + ":")));
       return {
         config: { ...s.config, projects, activeProjectId: wasActive ? projects[0]?.id ?? null : s.config.activeProjectId },
         sessions,
       };
     });
-    for (const kind of ["claude", "shell"] as const) {
-      const sid = sessionId(id, kind);
+    for (const t of project.terminals) {
+      const sid = sessionId(id, t.id);
       terminals.destroy(sid);
       await pty.forget(sid).catch(() => {});
     }
@@ -110,8 +115,54 @@ export const useStore = create<HangarState>((set, get) => ({
 
   setCommands: (id, commands) => set((s) => ({ config: patchProject(s.config, id, (p) => ({ ...p, commands })) })),
 
-  setClaudeCommand: (id, claudeCommand) =>
-    set((s) => ({ config: patchProject(s.config, id, (p) => ({ ...p, claudeCommand })) })),
+  addTerminal: async (projectId, name) => {
+    const project = get().config.projects.find((p) => p.id === projectId);
+    if (!project) return "";
+    const tab = { id: uid().slice(0, 8), name: name?.trim() || nextTerminalName(project.terminals) };
+    set((s) => ({
+      config: patchProject(s.config, projectId, (p) => ({
+        ...p,
+        terminals: [...p.terminals, tab],
+        layout: { ...p.layout, activeTab: tab.id },
+      })),
+    }));
+    const sid = sessionId(projectId, tab.id);
+    try {
+      const pid = await pty.create(sid, project.path, 120, 30);
+      get().setSession(sid, { alive: true, pid, exitCode: null });
+    } catch (e) {
+      get().setError(String(e));
+    }
+    return tab.id;
+  },
+
+  closeTerminal: async (projectId, terminalId) => {
+    const sid = sessionId(projectId, terminalId);
+    set((s) => {
+      const sessions = { ...s.sessions };
+      delete sessions[sid];
+      return {
+        sessions,
+        config: patchProject(s.config, projectId, (p) => {
+          const terminals = p.terminals.filter((t) => t.id !== terminalId);
+          const idx = p.terminals.findIndex((t) => t.id === terminalId);
+          let activeTab = p.layout.activeTab;
+          if (activeTab === terminalId) activeTab = terminals[Math.max(0, idx - 1)]?.id ?? CHANGES_TAB;
+          return { ...p, terminals, layout: { ...p.layout, activeTab } };
+        }),
+      };
+    });
+    terminals.destroy(sid);
+    await pty.forget(sid).catch(() => {});
+  },
+
+  renameTerminal: (projectId, terminalId, name) =>
+    set((s) => ({
+      config: patchProject(s.config, projectId, (p) => ({
+        ...p,
+        terminals: p.terminals.map((t) => (t.id === terminalId ? { ...t, name: name.trim() || t.name } : t)),
+      })),
+    })),
 
   ensureSessions: async (project) => {
     if (!get().daemonConnected) return;
@@ -122,18 +173,18 @@ export const useStore = create<HangarState>((set, get) => ({
       get().setError(String(e));
       return;
     }
-    for (const kind of ["claude", "shell"] as const) {
-      const sid = sessionId(project.id, kind);
+    for (const t of project.terminals) {
+      const sid = sessionId(project.id, t.id);
       const existing = live[sid];
       if (existing?.alive) {
         get().setSession(sid, { alive: true, pid: existing.pid, exitCode: null });
         continue;
       }
       try {
-        const pid = await pty.create(sid, project.path, 120, 30, kind === "claude" ? project.claudeCommand : undefined);
+        const pid = await pty.create(sid, project.path, 120, 30);
         get().setSession(sid, { alive: true, pid, exitCode: null });
       } catch (e) {
-        get().setError(`Could not start ${kind} session for ${project.name}: ${e}`);
+        get().setError(`Could not start terminal "${t.name}" for ${project.name}: ${e}`);
       }
     }
   },
@@ -143,19 +194,21 @@ export const useStore = create<HangarState>((set, get) => ({
   },
 
   stopSessions: async (id) => {
-    for (const kind of ["claude", "shell"] as const) {
-      const sid = sessionId(id, kind);
+    const project = get().config.projects.find((p) => p.id === id);
+    if (!project) return;
+    for (const t of project.terminals) {
+      const sid = sessionId(id, t.id);
       await pty.kill(sid).catch(() => {});
       get().setSession(sid, { alive: false, exitCode: null });
     }
   },
 
-  restartSession: async (projectId, kind) => {
+  restartSession: async (projectId, terminalId) => {
     const project = get().config.projects.find((p) => p.id === projectId);
     if (!project) return;
-    const sid = sessionId(projectId, kind);
+    const sid = sessionId(projectId, terminalId);
     try {
-      const pid = await pty.create(sid, project.path, 120, 30, kind === "claude" ? project.claudeCommand : undefined);
+      const pid = await pty.create(sid, project.path, 120, 30);
       terminals.markRestarted(sid);
       get().setSession(sid, { alive: true, pid, exitCode: null });
     } catch (e) {

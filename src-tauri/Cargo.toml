@@ -17,7 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 hangar-protocol = { path = "../crates/hangar-protocol" }
 hangard = { path = "../crates/hangard" }
-tauri = { version = "2", features = ["unstable"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde.workspace = true
 serde_json.workspace = true
@@ -26,4 +26,3 @@ base64.workspace = true
 libc.workspace = true
 dirs.workspace = true
 anyhow.workspace = true
-url = "2"

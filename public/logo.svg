@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2433"/>
+      <stop offset="1" stop-color="#0a0c11"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8ffbe6"/>
+      <stop offset="1" stop-color="#2cc4ae"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <!-- hangar arch -->
+  <path d="M232 752 V540 A280 280 0 0 1 792 540 V752" fill="none" stroke="url(#teal)" stroke-width="66" stroke-linecap="round"/>
+  <!-- inner arch glow line -->
+  <path d="M312 752 V560 A200 200 0 0 1 712 560 V752" fill="none" stroke="#2cc4ae" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>
+  <!-- ground -->
+  <path d="M172 752 H852" stroke="url(#teal)" stroke-width="44" stroke-linecap="round"/>
+  <!-- prompt chevron + cursor -->
+  <path d="M392 560 L470 630 L392 700" fill="none" stroke="#f1fffb" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="510" y="676" width="128" height="34" rx="10" fill="#f1fffb"/>
+</svg>

@@ -1,5 +1,4 @@
 import type { MonitorSnapshot } from "./ipc";
-import { sessionId } from "./types";
 
 export type ProjectStatus = "running" | "idle" | "error";
 export type SessionState = { alive: boolean; pid: number; exitCode: number | null };
@@ -9,10 +8,10 @@ export function deriveStatus(
   sessions: Record<string, SessionState>,
   monitor: MonitorSnapshot,
 ): ProjectStatus {
-  const ids = [sessionId(projectId, "claude"), sessionId(projectId, "shell")];
-  if (ids.some((id) => sessions[id] && !sessions[id].alive)) return "error";
-  if (ids.some((id) => (monitor.activity[id] ?? 0) > 0)) return "running";
-  if (monitor.ports.some((p) => p.session_id !== null && ids.includes(p.session_id))) return "running";
+  const mine = (id: string) => id.startsWith(projectId + ":");
+  if (Object.entries(sessions).some(([id, s]) => mine(id) && !s.alive)) return "error";
+  if (Object.entries(monitor.activity).some(([id, n]) => mine(id) && n > 0)) return "running";
+  if (monitor.ports.some((p) => p.session_id !== null && mine(p.session_id))) return "running";
   return "idle";
 }
 

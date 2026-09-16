@@ -13,7 +13,6 @@ export type PortRow = {
 export type MonitorSnapshot = { ports: PortRow[]; activity: Record<string, number>; error: string | null };
 export type FileStatus = { path: string; status: string; staged: boolean; old_path: string | null };
 export type GitStatus = { is_repo: boolean; files: FileStatus[]; error: string | null };
-export type Bounds = { x: number; y: number; width: number; height: number };
 
 export const pty = {
   list: () => invoke<SessionInfo[]>("pty_list"),
@@ -43,17 +42,6 @@ export const config = {
   save: (value: unknown) => invoke<void>("config_save", { value }),
 };
 
-export const browser = {
-  show: (projectId: string, url: string, bounds: Bounds) => invoke<void>("browser_show", { projectId, url, bounds }),
-  hide: (projectId: string) => invoke<void>("browser_hide", { projectId }),
-  navigate: (projectId: string, url: string) => invoke<void>("browser_navigate", { projectId, url }),
-  back: (projectId: string) => invoke<void>("browser_back", { projectId }),
-  forward: (projectId: string) => invoke<void>("browser_forward", { projectId }),
-  reload: (projectId: string) => invoke<void>("browser_reload", { projectId }),
-  setBounds: (projectId: string, bounds: Bounds) => invoke<void>("browser_set_bounds", { projectId, bounds }),
-  destroy: (projectId: string) => invoke<void>("browser_destroy", { projectId }),
-};
-
 export const on = {
   ptyOutput: (cb: (p: { id: string; data: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; data: string }>("pty:output", (e) => cb(e.payload)),
@@ -61,8 +49,6 @@ export const on = {
     listen<{ id: string; code: number | null }>("pty:exit", (e) => cb(e.payload)),
   daemonConnected: (cb: () => void) => listen("daemon:connected", () => cb()),
   daemonDisconnected: (cb: () => void) => listen("daemon:disconnected", () => cb()),
-  browserNavigated: (cb: (p: { project_id: string; url: string; finished: boolean }) => void) =>
-    listen<{ project_id: string; url: string; finished: boolean }>("browser:navigated", (e) => cb(e.payload)),
 };
 
 export function b64encode(s: string): string {

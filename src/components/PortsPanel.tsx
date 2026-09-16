@@ -14,7 +14,9 @@ export function PortsPanel({ project }: { project: Project }) {
   const nameOf = (sid: string | null) => {
     if (!sid) return null;
     const p = projects.find((x) => x.id === projectOfSession(sid));
-    return p ? `${p.name} · ${sid.split(":")[1]}` : sid;
+    if (!p) return sid;
+    const t = p.terminals.find((t) => t.id === sid.split(":")[1]);
+    return `${p.name} · ${t?.name ?? "terminal"}`;
   };
 
   const rows = showAll ? monitor.ports : monitor.ports.filter((r) => r.session_id !== null);
@@ -57,7 +59,7 @@ export function PortsPanel({ project }: { project: Project }) {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={5} className="muted">
-                  {showAll ? "Nothing is listening." : "No ports owned by Hangar projects yet. Run a dev server from the shell tab."}
+                  {showAll ? "Nothing is listening." : "No ports owned by Hangar projects yet. Start a dev server in one of the terminals."}
                 </td>
               </tr>
             )}
