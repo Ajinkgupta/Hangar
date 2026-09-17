@@ -29,19 +29,20 @@ const entries = new Map<string, Entry>();
 /** Set by the app: called when the user types into a terminal. */
 export const terminalHooks: { onInput: (id: string) => void } = { onInput: () => {} };
 
+export type TermTheme = { background: string; foreground: string; cursor: string; selectionBackground: string };
+let currentTheme: TermTheme = { background: "#0f1115", foreground: "#d6dbe5", cursor: "#5eead4", selectionBackground: "rgba(94,234,212,0.25)" };
+let currentFontSize = 13;
+
 function makeTerminal(): Terminal {
   return new Terminal({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize: currentFontSize,
     fontFamily: "'SF Mono', Menlo, Monaco, 'Courier New', monospace",
     scrollback: 8000,
     allowProposedApi: true,
     macOptionIsMeta: true,
     theme: {
-      background: "#0f1115",
-      foreground: "#d6dbe5",
-      cursor: "#5eead4",
-      selectionBackground: "rgba(94,234,212,0.25)",
+      ...currentTheme,
       black: "#1b1e26",
       brightBlack: "#5c6370",
       red: "#f87171",
@@ -202,6 +203,34 @@ export const terminals = {
     if (!e) return; // not attached yet; scrollback will cover it on first attach
     if (e.ready) e.term.write(b64decode(data));
     else e.queue.push(data);
+  },
+
+  /** Daemon told us we fell behind: reload the tail of scrollback from scratch. */
+  resyncFromDaemon(id: string) {
+    const e = entries.get(id);
+    if (!e || !e.opened) return;
+    e.ready = false;
+    e.queue = [];
+    e.term.reset();
+    void loadScrollback(id, e);
+  },
+
+  /** Apply theme + font size to every live terminal (and future ones). */
+  applyAppearance(theme: TermTheme, fontSize: number) {
+    currentTheme = theme;
+    currentFontSize = fontSize;
+    for (const [id, e] of entries) {
+      e.term.options.theme = { ...e.term.options.theme, ...theme };
+      if (e.term.options.fontSize !== fontSize) {
+        e.term.options.fontSize = fontSize;
+        e.lastSize = null;
+      }
+      if (e.opened && e.el.offsetParent !== null) terminals.fit(id);
+    }
+  },
+
+  allIds(): string[] {
+    return [...entries.keys()];
   },
 
   markRestarted(id: string) {

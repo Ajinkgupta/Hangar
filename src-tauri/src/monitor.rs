@@ -249,7 +249,7 @@ pub async fn monitor_tick(session_pids: HashMap<String, u32>) -> MonitorSnapshot
 
 #[tauri::command]
 pub fn kill_process(pid: u32, force: bool) -> Result<(), String> {
-    if pid <= 1 || pid == std::process::id() {
+    if pid <= 1 || pid == std::process::id() || pid > i32::MAX as u32 {
         return Err("refusing to kill that process".into());
     }
     let sig = if force { libc::SIGKILL } else { libc::SIGTERM };

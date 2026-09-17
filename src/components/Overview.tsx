@@ -53,6 +53,10 @@ function ProjectCard({ project }: { project: Project }) {
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (stopped) return;
+      if (document.visibilityState !== "visible") {
+        timer = setTimeout(tick, 3000);
+        return;
+      }
       const lines = await pty.tail(focusSid, 7).catch(() => [] as string[]);
       if (!stopped) setTail(lines);
       timer = setTimeout(tick, 3000);

@@ -71,7 +71,10 @@ export function Sidebar() {
       <ConnectionsSection />
       <div className="sidebar-footer">
         <AddProjectButton />
-        <DaemonIndicator />
+        <div className="footer-row">
+          <DaemonIndicator />
+          <button className="ghost small" title="Settings (⌘,)" onClick={() => useStore.getState().setSettingsOpen(true)}>⚙</button>
+        </div>
       </div>
       {menu && (
         <ContextMenu
@@ -283,6 +286,7 @@ function ContextMenu({ menu, onRename }: { menu: Menu; onRename: () => void }) {
   const project = useStore((s) => s.config.projects.find((p) => p.id === menu.id));
   const isRepo = useStore((s) => (project ? s.gitSummary[project.path]?.is_repo : false));
   const done = () => window.dispatchEvent(new Event("click"));
+  const [confirmRemove, setConfirmRemove] = useState(false);
   return (
     <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
       {editors[0] && project && (
@@ -307,8 +311,14 @@ function ContextMenu({ menu, onRename }: { menu: Menu; onRename: () => void }) {
         </button>
       )}
       <button onClick={() => void stop(menu.id).then(done)}>Stop all terminals</button>
-      <button className="danger" onClick={() => void remove(menu.id).then(done)}>
-        Remove from Hangar
+      <button
+        className={confirmRemove ? "danger solid" : "danger"}
+        onClick={() => {
+          if (confirmRemove) void remove(menu.id).then(done);
+          else setConfirmRemove(true);
+        }}
+      >
+        {confirmRemove ? "Really remove? (terminals end)" : "Remove from Hangar"}
       </button>
     </div>
   );

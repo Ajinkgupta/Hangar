@@ -10,6 +10,7 @@ type Script = {
   index: number;
   buffer: string;
   startedAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
   onStep?: (index: number) => void;
   onDone?: () => void;
 };
@@ -36,10 +37,15 @@ export const automation = {
       hooks.onDone?.();
       return;
     }
-    scripts.set(sessionId, { steps: compiled, index: 0, buffer: "", startedAt: Date.now(), ...hooks });
+    automation.stop(sessionId);
+    const script: Script = { steps: compiled, index: 0, buffer: "", startedAt: Date.now(), timer: null, ...hooks };
+    scripts.set(sessionId, script);
+    arm(sessionId, script);
   },
 
   stop(sessionId: string) {
+    const s = scripts.get(sessionId);
+    if (s?.timer) clearTimeout(s.timer);
     scripts.delete(sessionId);
   },
 
@@ -51,11 +57,6 @@ export const automation = {
   feed(sessionId: string, dataB64: string) {
     const s = scripts.get(sessionId);
     if (!s) return;
-    if (Date.now() - s.startedAt > STEP_TIMEOUT_MS) {
-      scripts.delete(sessionId);
-      s.onDone?.();
-      return;
-    }
     const text = stripAnsi(new TextDecoder().decode(b64decode(dataB64)));
     s.buffer = (s.buffer + text).slice(-BUFFER_KEEP);
     const step = s.steps[s.index];
@@ -67,11 +68,23 @@ export const automation = {
     s.onStep?.(s.index);
     s.index += 1;
     if (s.index >= s.steps.length) {
-      scripts.delete(sessionId);
+      automation.stop(sessionId);
       s.onDone?.();
+    } else {
+      arm(sessionId, s);
     }
   },
 };
+
+/** Each step gets STEP_TIMEOUT_MS even if no output ever arrives; then the script ends. */
+function arm(sessionId: string, s: Script) {
+  if (s.timer) clearTimeout(s.timer);
+  s.timer = setTimeout(() => {
+    if (scripts.get(sessionId) !== s) return;
+    scripts.delete(sessionId);
+    s.onDone?.();
+  }, STEP_TIMEOUT_MS);
+}
 
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex

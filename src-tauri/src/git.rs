@@ -48,8 +48,22 @@ pub fn parse_porcelain_z(out: &[u8]) -> Vec<FileStatus> {
     files
 }
 
+/// A real git, found once. Launched from Finder the PATH is minimal and `/usr/bin/git`
+/// is only the Xcode shim, so prefer Homebrew/local installs.
+fn git_bin() -> &'static str {
+    static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        for c in ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"] {
+            if std::path::Path::new(c).exists() {
+                return c.to_string();
+            }
+        }
+        "git".to_string()
+    })
+}
+
 fn git(cwd: &str, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("git")
+    Command::new(git_bin())
         .arg("-C")
         .arg(cwd)
         .arg("-c")
@@ -70,6 +84,9 @@ pub async fn git_status(path: String) -> GitStatus {
             let err = String::from_utf8_lossy(&out.stderr).to_string();
             if err.contains("not a git repository") {
                 return GitStatus { is_repo: false, files: vec![], error: None };
+            }
+            if err.contains("developer tools") || err.contains("xcode-select") {
+                return GitStatus { is_repo: false, files: vec![], error: Some("git is not installed (run: xcode-select --install)".into()) };
             }
             return GitStatus { is_repo: true, files: vec![], error: Some(err.trim().to_string()) };
         }
@@ -114,7 +131,7 @@ pub struct GitSummary {
 
 fn summary_one(path: &str) -> GitSummary {
     let mut s = GitSummary { path: path.to_string(), ..Default::default() };
-    let Ok(st) = git(path, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else { return s };
+    let Ok(st) = git(path, &["status", "--porcelain=v1", "-z", "--untracked-files=normal"]) else { return s };
     if !st.status.success() {
         return s;
     }
@@ -138,9 +155,15 @@ fn summary_one(path: &str) -> GitSummary {
 /// Cheap per-project git summary for badges (files changed, +/- lines, branch).
 #[tauri::command]
 pub async fn git_summary(paths: Vec<String>) -> Vec<GitSummary> {
-    tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| summary_one(p)).collect())
-        .await
-        .unwrap_or_default()
+    // One blocking task per project so a slow monorepo doesn't delay the others.
+    let handles: Vec<_> = paths.into_iter().map(|p| tauri::async_runtime::spawn_blocking(move || summary_one(&p))).collect();
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        if let Ok(s) = h.await {
+            out.push(s);
+        }
+    }
+    out
 }
 
 /// `git worktree add -b <branch> <sibling dir>`; returns the new folder.

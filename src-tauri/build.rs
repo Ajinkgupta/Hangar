@@ -6,5 +6,7 @@ fn main() {
     println!("cargo:rustc-env=HANGAR_BUILD_ID={}-{}", env!("CARGO_PKG_VERSION"), ts);
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=../crates/hangard/src");
+    println!("cargo:rerun-if-changed=../crates/hangar-protocol/src");
     tauri_build::build()
 }

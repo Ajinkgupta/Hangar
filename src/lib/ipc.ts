@@ -32,7 +32,15 @@ export const pty = {
   forget: (id: string) => invoke<void>("pty_forget", { id }),
 };
 
-export const daemonStatus = () => invoke<boolean>("daemon_status");
+export type DaemonStatus = { connected: boolean; stale: boolean; build: string | null };
+export const daemonStatus = () => invoke<DaemonStatus>("daemon_status");
+export type FsEntry = { name: string; path: string; is_dir: boolean; size: number; ignored: boolean };
+export type FileContent = { path: string; content: string; size: number; truncated: boolean; binary: boolean };
+export const fs = {
+  list: (root: string, dir: string) => invoke<FsEntry[]>("fs_list", { root, dir }),
+  read: (root: string, path: string) => invoke<FileContent>("fs_read", { root, path }),
+  reveal: (path: string) => invoke<void>("fs_reveal", { path }),
+};
 export const daemonRestart = () => invoke<void>("daemon_restart");
 export const openUrl = (url: string) => invoke<void>("open_url", { url });
 export const openInEditor = (appName: string, path: string) => invoke<void>("open_in_editor", { appName, path });
@@ -68,6 +76,7 @@ export const on = {
   ptyExit: (cb: (p: { id: string; code: number | null }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; code: number | null }>("pty:exit", (e) => cb(e.payload)),
   ptyBell: (cb: (p: { id: string }) => void): Promise<UnlistenFn> => listen<{ id: string }>("pty:bell", (e) => cb(e.payload)),
+  ptyResync: (cb: (p: { id: string }) => void): Promise<UnlistenFn> => listen<{ id: string }>("pty:resync", (e) => cb(e.payload)),
   daemonConnected: (cb: () => void) => listen("daemon:connected", () => cb()),
   daemonDisconnected: (cb: () => void) => listen("daemon:disconnected", () => cb()),
   daemonBuild: (cb: (p: { stale: boolean; build: string }) => void) =>

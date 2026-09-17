@@ -1,8 +1,20 @@
 /** Active tab is either a terminal id or the special "changes" view. */
 export type Tab = string;
 export const CHANGES_TAB = "changes";
+export const FILES_TAB = "files";
+export const TASKS_TAB = "tasks";
+export const SPECIAL_TABS = [FILES_TAB, CHANGES_TAB, TASKS_TAB];
 
 export type SavedCommand = { id: string; label: string; command: string };
+export type Task = { id: string; text: string; done: boolean; createdAt: number };
+export type ThemeName = "hangar" | "midnight" | "graphite" | "light";
+export type Settings = {
+  theme: ThemeName;
+  fontSize: number;
+  notifications: boolean;
+  sound: boolean;
+};
+export const defaultSettings = (): Settings => ({ theme: "hangar", fontSize: 13, notifications: true, sound: true });
 
 /** One automation step: when the terminal output matches `expect` (regex, case-insensitive),
  *  send `send` + Enter. A secret step keeps its value in the macOS Keychain. */
@@ -26,6 +38,7 @@ export type Project = {
   commands: SavedCommand[];
   /** saved command id -> the terminal tab it last ran in (commands own their tab) */
   commandRuns: Record<string, string>;
+  tasks: Task[];
   layout: ProjectLayout;
 };
 
@@ -36,6 +49,7 @@ export type Config = {
   connections: Connection[];
   /** connection id -> the SSH terminal tab it runs in (connections own their tab) */
   connectionRuns: Record<string, string>;
+  settings: Settings;
 };
 
 export function sshProject(): Project {
@@ -47,6 +61,7 @@ export function sshProject(): Project {
     terminals: [],
     commands: [],
     commandRuns: {},
+    tasks: [],
     layout: { ...defaultLayout(), portsOpen: false, activeTab: "" },
   };
 }
@@ -57,7 +72,14 @@ export const defaultLayout = (): ProjectLayout => ({
   portsOpen: true,
 });
 
-export const emptyConfig = (): Config => ({ version: 1, projects: [sshProject()], activeProjectId: null, connections: [], connectionRuns: {} });
+export const emptyConfig = (): Config => ({
+  version: 1,
+  projects: [sshProject()],
+  activeProjectId: null,
+  connections: [],
+  connectionRuns: {},
+  settings: defaultSettings(),
+});
 
 export function basename(path: string): string {
   const parts = path.replace(/\/+$/, "").split("/");
@@ -82,6 +104,7 @@ export function newProject(path: string): Project {
     terminals: [first],
     commands: defaultCommands(),
     commandRuns: {},
+    tasks: [],
     layout: { ...defaultLayout(), activeTab: first.id },
   };
 }
@@ -111,17 +134,41 @@ export function normalizeConfig(raw: unknown): Config {
   const connections: Connection[] = Array.isArray(r.connections)
     ? r.connections
         .filter((c): c is Connection => !!c && typeof c === "object" && typeof (c as Connection).command === "string")
-        .map((c) => ({ id: c.id || uid(), name: c.name || c.command, command: c.command, steps: Array.isArray(c.steps) ? c.steps : [] }))
+        .map((c) => ({
+          id: c.id || uid(),
+          name: c.name || c.command,
+          command: c.command,
+          steps: Array.isArray(c.steps) ? c.steps.filter((s) => s && typeof s.expect === "string") : [],
+        }))
     : [];
+  const rs = (r.settings || {}) as Partial<Settings>;
+  const settings: Settings = {
+    ...defaultSettings(),
+    ...(rs.theme === "hangar" || rs.theme === "midnight" || rs.theme === "graphite" || rs.theme === "light" ? { theme: rs.theme } : {}),
+    ...(typeof rs.fontSize === "number" && rs.fontSize >= 10 && rs.fontSize <= 22 ? { fontSize: rs.fontSize } : {}),
+    ...(typeof rs.notifications === "boolean" ? { notifications: rs.notifications } : {}),
+    ...(typeof rs.sound === "boolean" ? { sound: rs.sound } : {}),
+  };
   const normalized: Config = {
     version: 1,
     connections,
     connectionRuns: r.connectionRuns && typeof r.connectionRuns === "object" ? r.connectionRuns : {},
+    settings,
     projects: projects
       .filter((p): p is Project => !!p && typeof p === "object" && typeof (p as Project).path === "string")
       .map((p) => {
-        const terminals: TerminalTab[] =
-          Array.isArray(p.terminals) && p.terminals.length ? p.terminals : [{ id: uid().slice(0, 8), name: "main" }];
+        const seen = new Set<string>();
+        const rawTerminals: TerminalTab[] = Array.isArray(p.terminals)
+          ? p.terminals
+              .filter((t) => t && typeof t === "object")
+              .map((t) => {
+                let id = typeof t.id === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(t.id) ? t.id : uid().slice(0, 8);
+                while (seen.has(id)) id = uid().slice(0, 8);
+                seen.add(id);
+                return { id, name: typeof t.name === "string" && t.name ? t.name : "terminal" };
+              })
+          : [];
+        const terminals: TerminalTab[] = rawTerminals.length ? rawTerminals : [{ id: uid().slice(0, 8), name: "main" }];
         const raw = (p.layout || {}) as Partial<ProjectLayout>;
         const layout: ProjectLayout = {
           ...defaultLayout(),
@@ -129,7 +176,7 @@ export function normalizeConfig(raw: unknown): Config {
           ...(raw.diffView === "split" || raw.diffView === "unified" ? { diffView: raw.diffView } : {}),
           ...(typeof raw.portsOpen === "boolean" ? { portsOpen: raw.portsOpen } : {}),
         };
-        if (layout.activeTab !== CHANGES_TAB && !terminals.some((t) => t.id === layout.activeTab)) {
+        if (!SPECIAL_TABS.includes(layout.activeTab) && !terminals.some((t) => t.id === layout.activeTab)) {
           layout.activeTab = terminals[0]?.id ?? "";
         }
         const kind = p.kind === "ssh" || p.id === SSH_PROJECT_ID ? ("ssh" as const) : undefined;
@@ -139,8 +186,15 @@ export function normalizeConfig(raw: unknown): Config {
           path: p.path,
           ...(kind ? { kind } : {}),
           terminals: kind ? (Array.isArray(p.terminals) ? p.terminals : []) : terminals,
-          commands: Array.isArray(p.commands) ? p.commands : kind ? [] : defaultCommands(),
+          commands: Array.isArray(p.commands)
+            ? p.commands.filter((c) => c && typeof c.command === "string").map((c) => ({ ...c, id: c.id || uid(), label: c.label || c.command }))
+            : kind
+              ? []
+              : defaultCommands(),
           commandRuns: p.commandRuns && typeof p.commandRuns === "object" ? p.commandRuns : {},
+          tasks: Array.isArray(p.tasks)
+            ? p.tasks.filter((t) => t && typeof t.text === "string").map((t) => ({ id: t.id || uid(), text: t.text, done: !!t.done, createdAt: t.createdAt || 0 }))
+            : [],
           layout,
         };
       }),

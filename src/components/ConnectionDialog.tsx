@@ -43,7 +43,13 @@ export function ConnectionDialog({ editing }: { editing: Connection | "new" }) {
   };
 
   return (
-    <div className="palette-backdrop" onClick={close}>
+    <div
+      className="palette-backdrop"
+      onClick={close}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") close();
+      }}
+    >
       <div className="dialog wide" onClick={(e) => e.stopPropagation()}>
         <h3>{editing === "new" ? "New connection" : `Edit ${base.name}`}</h3>
         <label>

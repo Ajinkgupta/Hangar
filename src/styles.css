@@ -266,3 +266,41 @@ button.small { font-size: 11px; padding: 2px 8px; }
 .crash { padding: 40px; max-width: 800px; display: flex; flex-direction: column; gap: 12px; }
 .crash pre { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 11px; white-space: pre-wrap; user-select: text; color: var(--red); }
 .crash button { align-self: flex-start; }
+
+/* Files */
+.files-pane { flex: 1; display: flex; min-width: 0; }
+.files-tree { width: 260px; flex: none; border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg-2); }
+.files-head { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.files-head input { flex: 1; min-width: 0; font-size: 12px; padding: 3px 8px; }
+.files-tree ul { list-style: none; margin: 0; padding: 4px 0; overflow: auto; flex: 1; }
+.tree-row { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.tree-row:hover { background: var(--bg-3); }
+.tree-row.selected { background: var(--bg-3); color: var(--accent); }
+.tree-row.ignored { opacity: 0.5; }
+.tree-icon { width: 10px; color: var(--fg-muted); font-size: 10px; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
+.files-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+table.diff.file td.code { white-space: pre; }
+table.diff.file.wrap td.code { white-space: pre-wrap; word-break: break-all; }
+
+/* Tasks */
+.tasks-pane { flex: 1; display: flex; flex-direction: column; padding: 14px 18px; gap: 8px; max-width: 900px; }
+.tasks-add { display: flex; gap: 8px; }
+.tasks-add input { flex: 1; padding: 8px 10px; font-size: 13px; }
+.tasks-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); }
+.tasks { list-style: none; margin: 0; padding: 0; overflow: auto; }
+.task { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.task .task-text { flex: 1; user-select: text; }
+.task.done .task-text { text-decoration: line-through; color: var(--fg-muted); }
+.task .task-edit { flex: 1; }
+.task input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+
+/* Settings */
+.theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+.theme-swatch { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 2px solid; border-radius: 8px; text-align: left; }
+.swatch-accent { width: 14px; height: 14px; border-radius: 50%; }
+.check-row { flex-direction: row !important; align-items: center; gap: 8px; }
+.check-row input { accent-color: var(--accent); }
+.dialog input[type="range"] { accent-color: var(--accent); }
+.footer-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+.footer-row .daemon-indicator { margin-top: 0; }

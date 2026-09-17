@@ -6,11 +6,13 @@ import { Overview } from "./components/Overview";
 import { CommandPalette } from "./components/CommandPalette";
 import { WorktreeDialog } from "./components/WorktreeDialog";
 import { ConnectionDialog } from "./components/ConnectionDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { automation } from "./lib/automation";
+import { applyThemeVars, themeByName } from "./lib/themes";
 import { selectActiveProject, useStore } from "./store";
 import { daemonRestart, daemonStatus, detectEditors, git, monitorTick, notify, on, traySetStatus } from "./lib/ipc";
 import { terminalHooks, terminals } from "./lib/terminals";
-import { CHANGES_TAB, projectOfSession } from "./lib/types";
+import { CHANGES_TAB, SPECIAL_TABS, projectOfSession } from "./lib/types";
 
 export default function App() {
   const loaded = useStore((s) => s.loaded);
@@ -23,12 +25,20 @@ export default function App() {
   const paletteOpen = useStore((s) => s.paletteOpen);
   const worktreeFor = useStore((s) => s.worktreeFor);
   const connectionEditor = useStore((s) => s.connectionEditor);
-  const startedRef = useRef(false);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const settings = useStore((s) => s.config.settings);
+  const bootedRef = useRef(false);
 
-  // Boot: load config, wire daemon events, ensure sessions.
+  // Apply theme + terminal appearance whenever settings change.
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    const t = themeByName(settings.theme);
+    applyThemeVars(t);
+    terminals.applyAppearance(t.term, settings.fontSize);
+  }, [settings.theme, settings.fontSize]);
+
+  // Boot: wire daemon events (idempotent: listeners are re-registered after cleanup),
+  // load config and ensure sessions once.
+  useEffect(() => {
     const st = useStore.getState();
     const unlisteners: Array<Promise<() => void>> = [];
     unlisteners.push(
@@ -38,8 +48,14 @@ export default function App() {
         automation.feed(p.id, p.data);
       }),
     );
-    unlisteners.push(on.ptyExit((p) => useStore.getState().setSession(p.id, { alive: false, exitCode: p.code })));
+    unlisteners.push(on.ptyExit((p) => useStore.getState().onSessionExit(p.id, p.code)));
     unlisteners.push(on.ptyBell((p) => onBell(p.id)));
+    unlisteners.push(
+      on.ptyResync((p) => {
+        const ids = p.id === "*" ? terminals.allIds() : [p.id];
+        for (const id of ids) terminals.resyncFromDaemon(id);
+      }),
+    );
     unlisteners.push(
       on.daemonConnected(() => {
         useStore.getState().setDaemonConnected(true);
@@ -49,13 +65,18 @@ export default function App() {
     unlisteners.push(on.daemonDisconnected(() => useStore.getState().setDaemonConnected(false)));
     unlisteners.push(on.daemonBuild((p) => useStore.getState().setDaemonStale(p.stale)));
     terminalHooks.onInput = (id) => useStore.getState().clearAttention(id);
-    void (async () => {
-      await st.init();
-      detectEditors().then((e) => useStore.getState().setEditors(e)).catch(() => {});
-      const connected = await daemonStatus().catch(() => false);
-      useStore.getState().setDaemonConnected(connected);
-      if (connected) await useStore.getState().ensureAllSessions();
-    })();
+    if (!bootedRef.current) {
+      bootedRef.current = true;
+      void (async () => {
+        await st.init();
+        detectEditors().then((e) => useStore.getState().setEditors(e)).catch(() => {});
+        // Ask instead of relying on events that may have fired before we listened.
+        const status = await daemonStatus().catch(() => ({ connected: false, stale: false, build: null }));
+        useStore.getState().setDaemonConnected(status.connected);
+        useStore.getState().setDaemonStale(status.stale);
+        if (status.connected) await useStore.getState().ensureAllSessions();
+      })();
+    }
     return () => {
       unlisteners.forEach((u) => u.then((f) => f()));
     };
@@ -127,11 +148,20 @@ export default function App() {
       const s = useStore.getState();
       const project = s.config.projects.find((p) => p.id === s.config.activeProjectId);
       const key = e.key.toLowerCase();
+      if (key === "," && !e.shiftKey) {
+        e.preventDefault();
+        s.setSettingsOpen(!s.settingsOpen);
+        return;
+      }
       if (key === "p" && !e.shiftKey) {
         e.preventDefault();
         s.setPaletteOpen(!s.paletteOpen);
         return;
       }
+      // While a dialog is open, or typing in a text field, only the two toggles above apply.
+      if (s.paletteOpen || s.worktreeFor || s.connectionEditor || s.settingsOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA") && !target.classList.contains("xterm-helper-textarea")) return;
       if (key === "0" && !e.shiftKey) {
         e.preventDefault();
         s.setView(s.view === "overview" ? "project" : "overview");
@@ -146,7 +176,7 @@ export default function App() {
         return;
       }
       if (!project || s.view !== "project") return;
-      const tabs = [...project.terminals.map((t) => t.id), CHANGES_TAB];
+      const tabs = [...project.terminals.map((t) => t.id), ...(project.kind === "ssh" ? [] : SPECIAL_TABS)];
       const idx = tabs.indexOf(project.layout.activeTab);
       if (key === "t" && !e.shiftKey) {
         e.preventDefault();
@@ -211,6 +241,7 @@ export default function App() {
       {paletteOpen && <CommandPalette />}
       {worktreeFor && <WorktreeDialog projectId={worktreeFor} />}
       {connectionEditor && <ConnectionDialog editing={connectionEditor} />}
+      {settingsOpen && <SettingsDialog />}
     </div>
   );
 }
@@ -232,9 +263,9 @@ function onBell(sid: string) {
   const now = Date.now();
   if (now - (lastNotified[sid] ?? 0) < 5000) return;
   lastNotified[sid] = now;
-  if (!document.hasFocus()) {
+  if (!document.hasFocus() && s.config.settings.notifications) {
     const tab = project.terminals.find((t) => t.id === terminalId);
     const agent = s.monitor.agents[sid];
-    notify(project.name, `${agent ? agent + " in " : ""}${tab?.name ?? "terminal"} needs you`, true).catch(() => {});
+    notify(project.name, `${agent ? agent + " in " : ""}${tab?.name ?? "terminal"} needs you`, s.config.settings.sound).catch(() => {});
   }
 }

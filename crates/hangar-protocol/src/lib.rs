@@ -28,7 +28,12 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial_command: Option<String>,
     },
-    Scrollback { id: String },
+    Scrollback {
+        id: String,
+        /// Return at most this many trailing bytes (default: daemon's replay cap).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_bytes: Option<usize>,
+    },
     Write { id: String, data: String },
     Resize { id: String, cols: u16, rows: u16 },
     Kill { id: String },
@@ -77,6 +82,8 @@ pub enum ReplyBody {
 pub enum Event {
     Output { id: String, data: String },
     Exit { id: String, code: Option<i32> },
+    /// The client fell behind and output was dropped; it should reload scrollback.
+    Resync { id: String },
 }
 
 /// Anything the daemon can send.
@@ -87,11 +94,23 @@ pub enum ServerMessage {
     Event(Event),
 }
 
-/// Session ids are `<project-uuid>:<kind>`; this makes a safe file name from one.
+/// Session ids are `<project-uuid>:<terminal-id>`. Only these characters are allowed.
+pub fn valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
+}
+
+/// Injective file stem for a (valid) session id: `:` becomes `__`, `_` becomes `_u`.
 pub fn session_file_stem(id: &str) -> String {
-    id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect()
+    let mut out = String::with_capacity(id.len() + 4);
+    for c in id.chars() {
+        match c {
+            ':' => out.push_str("__"),
+            '_' => out.push_str("_u"),
+            c if c.is_ascii_alphanumeric() || c == '-' => out.push(c),
+            _ => out.push_str("_x"),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -132,7 +151,11 @@ mod tests {
     }
 
     #[test]
-    fn session_file_stem_replaces_colon() {
-        assert_eq!(session_file_stem("abc-123:claude"), "abc-123_claude");
+    fn session_file_stem_is_injective() {
+        assert_eq!(session_file_stem("abc-123:claude"), "abc-123__claude");
+        assert_ne!(session_file_stem("a:b"), session_file_stem("a_b"));
+        assert!(valid_session_id("p-1:t2"));
+        assert!(!valid_session_id(""));
+        assert!(!valid_session_id("a/b"));
     }
 }

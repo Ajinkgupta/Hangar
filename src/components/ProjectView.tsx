@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { CHANGES_TAB, sessionId, type Project, type TerminalTab } from "../lib/types";
+import { CHANGES_TAB, FILES_TAB, TASKS_TAB, sessionId, type Project, type TerminalTab } from "../lib/types";
 import { TerminalPane } from "./TerminalPane";
 import { SavedCommandsBar } from "./SavedCommandsBar";
 import { PortsPanel } from "./PortsPanel";
 import { ChangesPane } from "./ChangesPane";
+import { FilesPane } from "./FilesPane";
+import { TasksPane } from "./TasksPane";
 import { ConnectionsBar } from "./ConnectionsBar";
 
 export function ProjectView({ project }: { project: Project }) {
@@ -12,6 +14,13 @@ export function ProjectView({ project }: { project: Project }) {
   const stop = useStore((s) => s.stopSessions);
   const addTerminal = useStore((s) => s.addTerminal);
   const changed = useStore((s) => s.gitSummary[project.path]?.files ?? 0);
+  const openTasks = project.tasks.filter((t) => !t.done).length;
+  const [confirmStop, setConfirmStop] = useState(false);
+  useEffect(() => {
+    if (!confirmStop) return;
+    const t = setTimeout(() => setConfirmStop(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirmStop]);
   const branch = useStore((s) => s.gitSummary[project.path]?.branch ?? "");
   const { layout } = project;
   const isSsh = project.kind === "ssh";
@@ -28,6 +37,16 @@ export function ProjectView({ project }: { project: Project }) {
         {layout.activeTab === CHANGES_TAB && !isSsh && (
           <div className="tab-pane">
             <ChangesPane project={project} />
+          </div>
+        )}
+        {layout.activeTab === FILES_TAB && !isSsh && (
+          <div className="tab-pane">
+            <FilesPane project={project} />
+          </div>
+        )}
+        {layout.activeTab === TASKS_TAB && !isSsh && (
+          <div className="tab-pane">
+            <TasksPane project={project} />
           </div>
         )}
         {isSsh && project.terminals.length === 0 && (
@@ -70,8 +89,14 @@ export function ProjectView({ project }: { project: Project }) {
           {!isSsh && (
             <>
               <span className="tab-gap" />
+              <button className={layout.activeTab === FILES_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: FILES_TAB })}>
+                ▤ files
+              </button>
               <button className={layout.activeTab === CHANGES_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: CHANGES_TAB })}>
                 ⎇ changes{changed > 0 && <span className="count">{changed}</span>}
+              </button>
+              <button className={layout.activeTab === TASKS_TAB ? "tab active changes" : "tab changes"} onClick={() => set({ activeTab: TASKS_TAB })}>
+                ☑ tasks{openTasks > 0 && <span className="count">{openTasks}</span>}
               </button>
             </>
           )}
@@ -82,8 +107,17 @@ export function ProjectView({ project }: { project: Project }) {
               ports
             </button>
           )}
-          <button className="danger" onClick={() => void stop(project.id)} title="Stop all terminals of this project">
-            stop
+          <button
+            className={confirmStop ? "danger solid" : "danger"}
+            onClick={() => {
+              if (confirmStop) {
+                setConfirmStop(false);
+                void stop(project.id);
+              } else setConfirmStop(true);
+            }}
+            title="Stop all terminals of this project (click twice)"
+          >
+            {confirmStop ? "stop all? click again" : "stop"}
           </button>
         </div>
       </header>

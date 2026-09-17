@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod daemon_client;
+pub mod files;
 pub mod git;
 pub mod monitor;
 
@@ -9,6 +10,18 @@ use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_notification::NotificationExt;
+
+const HOTKEY: &str = "ctrl+alt+h";
+
+/// Spawns a fire-and-forget child and reaps it so it never lingers as a zombie.
+fn spawn_and_reap(mut cmd: std::process::Command) -> Result<(), String> {
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
 
 
 /// Opens an http(s) link in the user's default browser (terminal link clicks).
@@ -17,11 +30,9 @@ fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("only http(s) links can be opened".into());
     }
-    std::process::Command::new("open")
-        .arg(&url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let mut c = std::process::Command::new("open");
+    c.arg(&url);
+    spawn_and_reap(c)
 }
 
 /// Opens a folder or file in the given editor app (e.g. "Cursor", "Visual Studio Code").
@@ -30,13 +41,9 @@ fn open_in_editor(app_name: String, path: String) -> Result<(), String> {
     if !std::path::Path::new(&path).exists() {
         return Err(format!("{path} does not exist"));
     }
-    std::process::Command::new("open")
-        .arg("-a")
-        .arg(&app_name)
-        .arg(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let mut c = std::process::Command::new("open");
+    c.arg("-a").arg(&app_name).arg(&path);
+    spawn_and_reap(c)
 }
 
 /// Editors found in /Applications, in preference order.
@@ -49,20 +56,14 @@ fn detect_editors() -> Vec<String> {
         .collect()
 }
 
-/// macOS notification via osascript (no plugin, no permission prompt beyond the first).
+/// Native macOS notification, attributed to Hangar (its icon; click focuses the app).
 #[tauri::command]
-fn notify(title: String, body: String, sound: bool) -> Result<(), String> {
-    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-    let mut script = format!("display notification \"{}\" with title \"Hangar\" subtitle \"{}\"", esc(&body), esc(&title));
+fn notify(app: AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
+    let mut n = app.notification().builder().title(title).body(body);
     if sound {
-        script.push_str(" sound name \"Glass\"");
+        n = n.sound("Glass");
     }
-    std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    n.show().map_err(|e| e.to_string())
 }
 
 fn security(args: &[&str]) -> Result<std::process::Output, String> {
@@ -70,28 +71,46 @@ fn security(args: &[&str]) -> Result<std::process::Output, String> {
 }
 
 /// Stores a secret in the macOS Keychain (generic password, account "hangar").
+/// Runs off the main thread: the keychain may be locked and prompt the user.
 #[tauri::command]
-fn secret_set(key: String, value: String) -> Result<(), String> {
-    let out = security(&["add-generic-password", "-a", "hangar", "-s", &key, "-w", &value, "-U"])?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(())
+async fn secret_set(key: String, value: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = security(&["add-generic-password", "-a", "hangar", "-s", &key, "-w", &value, "-U"])?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn secret_get(key: String) -> Result<String, String> {
-    let out = security(&["find-generic-password", "-a", "hangar", "-s", &key, "-w"])?;
-    if !out.status.success() {
-        return Err(format!("no secret stored for {key}"));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string())
+async fn secret_get(key: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = security(&["find-generic-password", "-a", "hangar", "-s", &key, "-w"])?;
+        if !out.status.success() {
+            // 44 = errSecItemNotFound; anything else is a real keychain error worth showing.
+            return Err(if out.status.code() == Some(44) {
+                format!("no secret stored for {key}")
+            } else {
+                String::from_utf8_lossy(&out.stderr).trim().to_string()
+            });
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn secret_delete(key: String) -> Result<(), String> {
-    let _ = security(&["delete-generic-password", "-a", "hangar", "-s", &key])?;
-    Ok(())
+async fn secret_delete(key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = security(&["delete-generic-password", "-a", "hangar", "-s", &key])?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Menu-bar text: how many agents are waiting / running.
@@ -122,10 +141,11 @@ fn focus_main(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state() == ShortcutState::Pressed && shortcut == &"cmd+shift+h".parse::<Shortcut>().unwrap() {
+                    if event.state() == ShortcutState::Pressed && shortcut == &HOTKEY.parse::<Shortcut>().unwrap() {
                         match app.get_webview_window("main") {
                             Some(w) if w.is_focused().unwrap_or(false) => {
                                 let _ = w.hide();
@@ -195,7 +215,7 @@ pub fn run() {
                 }
             })
             .build(app)?;
-            if let Err(e) = app.global_shortcut().register("cmd+shift+h".parse::<Shortcut>().unwrap()) {
+            if let Err(e) = app.global_shortcut().register(HOTKEY.parse::<Shortcut>().unwrap()) {
                 eprintln!("global shortcut not registered: {e}");
             }
             let handle = app.handle().clone();
@@ -221,6 +241,9 @@ pub fn run() {
             git::git_diff,
             git::git_summary,
             git::git_worktree_add,
+            files::fs_list,
+            files::fs_read,
+            files::fs_reveal,
             config::config_load,
             config::config_save,
             open_url,

@@ -28,8 +28,10 @@ sleep 1
 pkill -f "Hangar.app/Contents/MacOS/hangar$" >/dev/null 2>&1 || true
 if [ "${KEEP_SESSIONS:-0}" != "1" ]; then
   echo "▸ restarting session daemon (set KEEP_SESSIONS=1 to keep terminals alive)"
-  pkill -f "hangar --daemon" >/dev/null 2>&1 || true
-  rm -f "$HOME/Library/Application Support/hangar/hangard.sock"
+  PIDF="$HOME/Library/Application Support/hangar/hangard.pid"
+  if [ -f "$PIDF" ]; then kill "$(cat "$PIDF")" >/dev/null 2>&1 || true; fi
+  sleep 0.5
+  rm -f "$HOME/Library/Application Support/hangar/hangard.sock" "$PIDF"
 fi
 
 echo "▸ installing to /Applications"

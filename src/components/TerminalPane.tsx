@@ -63,6 +63,7 @@ export function TerminalPane({ project, tab, visible }: { project: Project; tab:
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("focus", onFocus);
+      terminals.setVisible(id, false); // also on unmount (project switch)
     };
   }, [visible, id, clearAttention]);
 

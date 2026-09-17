@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
-import { CHANGES_TAB } from "../lib/types";
+import { CHANGES_TAB, sessionId } from "../lib/types";
+import { terminals } from "../lib/terminals";
 
 type Item = { key: string; label: string; hint: string; run: () => void };
 
 /** ⌘P: jump to any project or terminal by name. */
 export function CommandPalette() {
-  const close = () => useStore.getState().setPaletteOpen(false);
+  const close = () => {
+    useStore.getState().setPaletteOpen(false);
+    const s = useStore.getState();
+    const p = s.config.projects.find((x) => x.id === s.config.activeProjectId);
+    if (p && s.view === "project") requestAnimationFrame(() => terminals.focus(sessionId(p.id, p.layout.activeTab)));
+  };
   const projects = useStore(useShallow((s) => s.config.projects.filter((p) => p.kind !== "ssh")));
   const connections = useStore((s) => s.config.connections);
   const [q, setQ] = useState("");

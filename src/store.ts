@@ -3,8 +3,9 @@ import { b64encode, config as configIpc, git, pty, secrets, type GitSummary, typ
 import { automation } from "./lib/automation";
 import type { SessionState } from "./lib/status";
 import {
-  CHANGES_TAB,
+  FILES_TAB,
   SSH_PROJECT_ID,
+  projectOfSession,
   emptyConfig,
   newProject,
   nextTerminalName,
@@ -17,6 +18,8 @@ import {
   type SavedCommand,
   type Connection,
   type ConnectionStep,
+  type Settings,
+  type Task,
 } from "./lib/types";
 import { terminals } from "./lib/terminals";
 
@@ -44,6 +47,9 @@ export interface HangarState {
   connectionEditor: Connection | "new" | null;
   /** session id -> connection automation state for the UI */
   connecting: Record<string, "running" | "done">;
+  /** session id -> when a saved command/connection was last typed into it */
+  launchedAt: Record<string, number>;
+  settingsOpen: boolean;
 
   init: () => Promise<void>;
   addProject: (path: string) => Promise<void>;
@@ -86,6 +92,12 @@ export interface HangarState {
   saveConnection: (c: Connection, plainSecrets: Record<number, string>) => Promise<void>;
   removeConnection: (id: string) => Promise<void>;
   runConnection: (id: string) => Promise<void>;
+
+  /** A session ended (from the daemon). Ignored for tabs that no longer exist. */
+  onSessionExit: (sessionId: string, code: number | null) => void;
+  setTasks: (projectId: string, tasks: Task[]) => void;
+  setSettings: (patch: Partial<Settings>) => void;
+  setSettingsOpen: (v: boolean) => void;
 }
 
 function patchProject(cfg: Config, id: string, fn: (p: Project) => Project): Config {
@@ -110,6 +122,8 @@ export const useStore = create<HangarState>((set, get) => ({
   worktreeFor: null,
   connectionEditor: null,
   connecting: {},
+  launchedAt: {},
+  settingsOpen: false,
 
   init: async () => {
     const raw = await configIpc.load();
@@ -140,6 +154,7 @@ export const useStore = create<HangarState>((set, get) => ({
     });
     for (const t of project.terminals) {
       const sid = sessionId(id, t.id);
+      automation.stop(sid);
       terminals.destroy(sid);
       await pty.forget(sid).catch(() => {});
     }
@@ -194,7 +209,7 @@ export const useStore = create<HangarState>((set, get) => ({
           const terminals = p.terminals.filter((t) => t.id !== terminalId);
           const idx = p.terminals.findIndex((t) => t.id === terminalId);
           let activeTab = p.layout.activeTab;
-          if (activeTab === terminalId) activeTab = terminals[Math.max(0, idx - 1)]?.id ?? CHANGES_TAB;
+          if (activeTab === terminalId) activeTab = terminals[Math.max(0, idx - 1)]?.id ?? FILES_TAB;
           const commandRuns = Object.fromEntries(Object.entries(p.commandRuns).filter(([, tid]) => tid !== terminalId));
           return { ...p, terminals, commandRuns, layout: { ...p.layout, activeTab } };
         }),
@@ -205,6 +220,14 @@ export const useStore = create<HangarState>((set, get) => ({
         config: { ...s.config, connectionRuns: Object.fromEntries(Object.entries(s.config.connectionRuns).filter(([, tid]) => tid !== terminalId)) },
       }));
     }
+    automation.stop(sid);
+    set((s) => {
+      const connecting = { ...s.connecting };
+      delete connecting[sid];
+      const launchedAt = { ...s.launchedAt };
+      delete launchedAt[sid];
+      return { connecting, launchedAt };
+    });
     terminals.destroy(sid);
     await pty.forget(sid).catch(() => {});
   },
@@ -228,12 +251,15 @@ export const useStore = create<HangarState>((set, get) => ({
       const sid = sessionId(projectId, owned.id);
       s.updateLayout(projectId, { activeTab: owned.id });
       const alive = s.sessions[sid]?.alive !== false;
-      const running = (s.monitor.activity[sid] ?? 0) > 0;
+      // Activity is polled every few seconds; a command typed moments ago counts as running.
+      const justLaunched = Date.now() - (s.launchedAt[sid] ?? 0) < 10_000;
+      const running = (s.monitor.activity[sid] ?? 0) > 0 || justLaunched;
       if (alive && running) {
         requestAnimationFrame(() => terminals.focus(sid));
         return; // still running: just show it
       }
       if (!alive) await s.restartSession(projectId, owned.id);
+      set((st) => ({ launchedAt: { ...st.launchedAt, [sid]: Date.now() } }));
       pty.write(sid, b64encode(cmd.command + "\r")).catch((e) => get().setError(String(e)));
       requestAnimationFrame(() => terminals.focus(sid));
       return;
@@ -244,6 +270,7 @@ export const useStore = create<HangarState>((set, get) => ({
       config: patchProject(st.config, projectId, (p) => ({ ...p, commandRuns: { ...p.commandRuns, [commandId]: terminalId } })),
     }));
     const sid = sessionId(projectId, terminalId);
+    set((st) => ({ launchedAt: { ...st.launchedAt, [sid]: Date.now() } }));
     await new Promise((r) => setTimeout(r, 300)); // let the shell print its prompt
     pty.write(sid, b64encode(cmd.command + "\r")).catch((e) => get().setError(String(e)));
     requestAnimationFrame(() => terminals.focus(sid));
@@ -259,6 +286,9 @@ export const useStore = create<HangarState>((set, get) => ({
       }
     }
     for (const t of project.terminals) {
+      // The user may have closed this tab while we were awaiting: never recreate it.
+      const stillThere = get().config.projects.find((p) => p.id === project.id)?.terminals.some((x) => x.id === t.id);
+      if (!stillThere) continue;
       const sid = sessionId(project.id, t.id);
       const existing = live[sid];
       if (existing?.alive) {
@@ -268,7 +298,8 @@ export const useStore = create<HangarState>((set, get) => ({
       try {
         const pid = await pty.create(sid, project.path, 120, 30);
         get().setSession(sid, { alive: true, pid, exitCode: null });
-        terminals.resync(sid);
+        if (existing) terminals.markRestarted(sid); // it died while we were away: say so
+        else terminals.resync(sid);
       } catch (e) {
         get().setError(`Could not start terminal "${t.name}" for ${project.name}: ${e}`);
       }
@@ -323,7 +354,7 @@ export const useStore = create<HangarState>((set, get) => ({
   markAttention: (sid) => set((s) => ({ attention: { ...s.attention, [sid]: Date.now() } })),
   clearAttention: (sid) =>
     set((s) => {
-      if (!(sid in s.attention)) return {};
+      if (!(sid in s.attention)) return s;
       const attention = { ...s.attention };
       delete attention[sid];
       return { attention };
@@ -331,7 +362,7 @@ export const useStore = create<HangarState>((set, get) => ({
   noteOutput: (sid) =>
     set((s) => {
       const now = Date.now();
-      if (now - (s.lastOutput[sid] ?? 0) < 1000) return {};
+      if (now - (s.lastOutput[sid] ?? 0) < 1000) return s;
       return { lastOutput: { ...s.lastOutput, [sid]: now } };
     }),
   setGitSummary: (list) => set({ gitSummary: Object.fromEntries(list.map((g) => [g.path, g])) }),
@@ -405,7 +436,8 @@ export const useStore = create<HangarState>((set, get) => ({
       const sid = sessionId(SSH_PROJECT_ID, terminalId);
       get().updateLayout(SSH_PROJECT_ID, { activeTab: terminalId });
       const alive = get().sessions[sid]?.alive !== false;
-      const connected = (get().monitor.activity[sid] ?? 0) > 0 || automation.isRunning(sid);
+      const justLaunched = Date.now() - (get().launchedAt[sid] ?? 0) < 10_000;
+      const connected = (get().monitor.activity[sid] ?? 0) > 0 || automation.isRunning(sid) || justLaunched;
       if (alive && connected) {
         requestAnimationFrame(() => terminals.focus(sid));
         return; // already connected: just show it
@@ -421,15 +453,36 @@ export const useStore = create<HangarState>((set, get) => ({
       freshShell = true;
     }
     const sid = sessionId(SSH_PROJECT_ID, terminalId);
-    set((s) => ({ connecting: { ...s.connecting, [sid]: "running" } }));
+    // A fresh shell needs a moment to print its prompt before we type.
+    if (freshShell) await new Promise((r) => setTimeout(r, 350));
+    set((s) => ({ connecting: { ...s.connecting, [sid]: "running" }, launchedAt: { ...s.launchedAt, [sid]: Date.now() } }));
+    // Arm the expect/send script only now, so the local prompt can't trigger a step.
     automation.start(sid, resolved, {
       onDone: () => set((s) => ({ connecting: { ...s.connecting, [sid]: "done" } })),
     });
-    // A fresh shell needs a moment to print its prompt before we type.
-    if (freshShell) await new Promise((r) => setTimeout(r, 350));
     pty.write(sid, b64encode(c.command + "\r")).catch((e) => get().setError(String(e)));
     requestAnimationFrame(() => terminals.focus(sid));
   },
+
+  onSessionExit: (sid, code) => {
+    const s = get();
+    const pid = projectOfSession(sid);
+    const tid = sid.slice(pid.length + 1);
+    const project = s.config.projects.find((p) => p.id === pid);
+    if (!project || !project.terminals.some((t) => t.id === tid)) return; // tab already closed
+    automation.stop(sid);
+    set((st) => {
+      const connecting = { ...st.connecting };
+      delete connecting[sid];
+      return { connecting };
+    });
+    s.setSession(sid, { alive: false, exitCode: code });
+  },
+
+  setTasks: (projectId, tasks) => set((s) => ({ config: patchProject(s.config, projectId, (p) => ({ ...p, tasks })) })),
+
+  setSettings: (patch) => set((s) => ({ config: { ...s.config, settings: { ...s.config.settings, ...patch } } })),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 
   addWorktree: async (projectId, branch) => {
     const project = get().config.projects.find((p) => p.id === projectId);

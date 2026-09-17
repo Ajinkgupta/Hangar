@@ -18,6 +18,7 @@ export function ChangesPane({ project }: { project: Project }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
 
   // Poll status every 5s while mounted (git status on a big repo is not free).
   useEffect(() => {
@@ -25,9 +26,14 @@ export function ChangesPane({ project }: { project: Project }) {
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (stopped) return;
+      if (document.visibilityState !== "visible") {
+        timer = setTimeout(tick, 5000);
+        return;
+      }
       const s = await git.status(project.path).catch((e) => ({ is_repo: true, files: [], error: String(e) }) as GitStatus);
       if (stopped) return;
       setStatus((prev) => (JSON.stringify(prev) === JSON.stringify(s) ? prev : s));
+      setTick((n) => n + 1);
       timer = setTimeout(tick, 5000);
     };
     void tick();
@@ -65,7 +71,7 @@ export function ChangesPane({ project }: { project: Project }) {
     return () => {
       cancelled = true;
     };
-  }, [project.path, currentKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project.path, currentKey, tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const parsed = useMemo(() => (current && diffs[current.path] !== undefined ? parseUnifiedDiff(diffs[current.path]) : null), [current, diffs]);
 
