@@ -34,7 +34,7 @@ pub struct MonitorSnapshot {
 }
 
 /// Process names that count as "an agent is running here".
-const AGENTS: &[&str] = &["claude", "codex", "cursor-agent", "aider", "gemini", "opencode", "amp", "copilot", "goose"];
+const AGENTS: &[&str] = &["claude", "codex", "aider", "gemini", "opencode", "amp", "copilot", "goose"];
 
 /// For every session shell, the first agent found among its descendants.
 pub fn agents(procs: &HashMap<u32, Proc>, sessions: &HashMap<u32, String>) -> HashMap<String, String> {

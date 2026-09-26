@@ -50,6 +50,9 @@ export function Sidebar() {
         <span className="grid-icon">▦</span> Overview
         {waiting > 0 && <span className="waiting-badge">{waiting} waiting</span>}
       </button>
+      <button className="sidebar-search" onClick={() => useStore.getState().setPaletteOpen(true)}>
+        <span>Search workspace…</span><kbd>⌘P</kbd>
+      </button>
       <div className="sidebar-section">Projects</div>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>

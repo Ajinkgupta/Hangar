@@ -19,7 +19,6 @@ import {
   type Connection,
   type ConnectionStep,
   type Settings,
-  type Task,
 } from "./lib/types";
 import { terminals } from "./lib/terminals";
 
@@ -69,6 +68,7 @@ export interface HangarState {
   ensureSessions: (project: Project, live?: LiveSessions) => Promise<void>;
   ensureAllSessions: () => Promise<void>;
   stopSessions: (id: string) => Promise<void>;
+  stopSession: (projectId: string, terminalId: string) => Promise<void>;
   restartSession: (projectId: string, terminalId: string) => Promise<void>;
   setSession: (id: string, patch: Partial<SessionState>) => void;
 
@@ -95,13 +95,30 @@ export interface HangarState {
 
   /** A session ended (from the daemon). Ignored for tabs that no longer exist. */
   onSessionExit: (sessionId: string, code: number | null) => void;
-  setTasks: (projectId: string, tasks: Task[]) => void;
   setSettings: (patch: Partial<Settings>) => void;
   setSettingsOpen: (v: boolean) => void;
 }
 
 function patchProject(cfg: Config, id: string, fn: (p: Project) => Project): Config {
   return { ...cfg, projects: cfg.projects.map((p) => (p.id === id ? fn(p) : p)) };
+}
+
+function withoutSessions(s: HangarState, remove: (id: string) => boolean) {
+  const keep = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([id]) => !remove(id)));
+  return {
+    sessions: keep(s.sessions), attention: keep(s.attention), lastOutput: keep(s.lastOutput),
+    connecting: keep(s.connecting), launchedAt: keep(s.launchedAt),
+  };
+}
+
+async function acceptCreatedSession(projectId: string, terminalId: string, pid: number): Promise<boolean> {
+  const sid = sessionId(projectId, terminalId);
+  if (!useStore.getState().config.projects.find((p) => p.id === projectId)?.terminals.some((t) => t.id === terminalId)) {
+    await pty.forget(sid).catch(() => {});
+    return false;
+  }
+  useStore.getState().setSession(sid, { alive: true, pid, exitCode: null });
+  return true;
 }
 
 export const useStore = create<HangarState>((set, get) => ({
@@ -146,10 +163,9 @@ export const useStore = create<HangarState>((set, get) => ({
     const wasActive = get().config.activeProjectId === id;
     set((s) => {
       const projects = s.config.projects.filter((p) => p.id !== id);
-      const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([sid]) => !sid.startsWith(id + ":")));
       return {
         config: { ...s.config, projects, activeProjectId: wasActive ? projects[0]?.id ?? null : s.config.activeProjectId },
-        sessions,
+        ...withoutSessions(s, (sid) => sid.startsWith(id + ":")),
       };
     });
     for (const t of project.terminals) {
@@ -165,7 +181,9 @@ export const useStore = create<HangarState>((set, get) => ({
   reorderProjects: (ids) =>
     set((s) => {
       const byId = new Map(s.config.projects.map((p) => [p.id, p]));
-      const projects = ids.map((i) => byId.get(i)!).filter(Boolean);
+      const ordered = [...new Set(ids)].map((i) => byId.get(i)!).filter(Boolean);
+      const included = new Set(ordered.map((p) => p.id));
+      const projects = [...ordered, ...s.config.projects.filter((p) => !included.has(p.id))];
       return { config: { ...s.config, projects } };
     }),
 
@@ -190,26 +208,29 @@ export const useStore = create<HangarState>((set, get) => ({
     const sid = sessionId(projectId, tab.id);
     try {
       const pid = await pty.create(sid, project.path, 120, 30);
-      get().setSession(sid, { alive: true, pid, exitCode: null });
+      if (!await acceptCreatedSession(projectId, tab.id, pid)) return "";
       terminals.resync(sid);
     } catch (e) {
+      if (get().config.projects.find((p) => p.id === projectId)?.terminals.some((t) => t.id === tab.id)) {
+        get().setSession(sid, { alive: false, pid: 0, exitCode: null });
+      }
       get().setError(String(e));
+      return "";
     }
     return tab.id;
   },
 
   closeTerminal: async (projectId, terminalId) => {
+    if (!get().config.projects.find((p) => p.id === projectId)?.terminals.some((t) => t.id === terminalId)) return;
     const sid = sessionId(projectId, terminalId);
     set((s) => {
-      const sessions = { ...s.sessions };
-      delete sessions[sid];
       return {
-        sessions,
+        ...withoutSessions(s, (id) => id === sid),
         config: patchProject(s.config, projectId, (p) => {
           const terminals = p.terminals.filter((t) => t.id !== terminalId);
           const idx = p.terminals.findIndex((t) => t.id === terminalId);
           let activeTab = p.layout.activeTab;
-          if (activeTab === terminalId) activeTab = terminals[Math.max(0, idx - 1)]?.id ?? FILES_TAB;
+          if (activeTab === terminalId) activeTab = terminals[Math.max(0, idx - 1)]?.id ?? (p.kind === "ssh" ? "" : FILES_TAB);
           const commandRuns = Object.fromEntries(Object.entries(p.commandRuns).filter(([, tid]) => tid !== terminalId));
           return { ...p, terminals, commandRuns, layout: { ...p.layout, activeTab } };
         }),
@@ -259,6 +280,7 @@ export const useStore = create<HangarState>((set, get) => ({
         return; // still running: just show it
       }
       if (!alive) await s.restartSession(projectId, owned.id);
+      if (!get().config.projects.find((p) => p.id === projectId)?.terminals.some((t) => t.id === owned.id) || get().sessions[sid]?.alive === false) return;
       set((st) => ({ launchedAt: { ...st.launchedAt, [sid]: Date.now() } }));
       pty.write(sid, b64encode(cmd.command + "\r")).catch((e) => get().setError(String(e)));
       requestAnimationFrame(() => terminals.focus(sid));
@@ -297,7 +319,7 @@ export const useStore = create<HangarState>((set, get) => ({
       }
       try {
         const pid = await pty.create(sid, project.path, 120, 30);
-        get().setSession(sid, { alive: true, pid, exitCode: null });
+        if (!await acceptCreatedSession(project.id, t.id, pid)) continue;
         if (existing) terminals.markRestarted(sid); // it died while we were away: say so
         else terminals.resync(sid);
       } catch (e) {
@@ -317,24 +339,36 @@ export const useStore = create<HangarState>((set, get) => ({
     await Promise.all(get().config.projects.map((p) => get().ensureSessions(p, live)));
   },
 
+  stopSession: async (projectId, terminalId) => {
+    const project = get().config.projects.find((p) => p.id === projectId);
+    if (!project?.terminals.some((t) => t.id === terminalId)) return;
+    const sid = sessionId(projectId, terminalId);
+    automation.stop(sid);
+    try {
+      await pty.kill(sid);
+      get().onSessionExit(sid, null);
+      get().clearAttention(sid);
+    } catch (e) {
+      get().setError(`Could not stop terminal: ${e}`);
+    }
+  },
+
   stopSessions: async (id) => {
     const project = get().config.projects.find((p) => p.id === id);
     if (!project) return;
     for (const t of project.terminals) {
-      const sid = sessionId(id, t.id);
-      await pty.kill(sid).catch(() => {});
-      get().setSession(sid, { alive: false, exitCode: null });
+      await get().stopSession(id, t.id);
     }
   },
 
   restartSession: async (projectId, terminalId) => {
     const project = get().config.projects.find((p) => p.id === projectId);
-    if (!project) return;
+    if (!project?.terminals.some((t) => t.id === terminalId)) return;
     const sid = sessionId(projectId, terminalId);
     try {
       const pid = await pty.create(sid, project.path, 120, 30);
+      if (!await acceptCreatedSession(projectId, terminalId, pid)) return;
       terminals.markRestarted(sid);
-      get().setSession(sid, { alive: true, pid, exitCode: null });
     } catch (e) {
       get().setError(String(e));
     }
@@ -378,7 +412,9 @@ export const useStore = create<HangarState>((set, get) => ({
     for (let i = 0; i < c.steps.length; i++) {
       const st = { ...c.steps[i] };
       if (plainSecrets[i] !== undefined) {
-        const key = `hangar-conn-${c.id}-${i}`;
+        // Step positions change when steps are removed or reordered. Never
+        // overwrite a key still referenced by another step or the saved config.
+        const key = `hangar-conn-${c.id}-${uid()}`;
         try {
           await secrets.set(key, plainSecrets[i]);
           st.secretRef = key;
@@ -444,6 +480,7 @@ export const useStore = create<HangarState>((set, get) => ({
       }
       if (!alive) {
         await get().restartSession(SSH_PROJECT_ID, terminalId);
+        if (get().sessions[sid]?.alive !== true) return;
         freshShell = true;
       }
     } else {
@@ -479,7 +516,6 @@ export const useStore = create<HangarState>((set, get) => ({
     s.setSession(sid, { alive: false, exitCode: code });
   },
 
-  setTasks: (projectId, tasks) => set((s) => ({ config: patchProject(s.config, projectId, (p) => ({ ...p, tasks })) })),
 
   setSettings: (patch) => set((s) => ({ config: { ...s.config, settings: { ...s.config.settings, ...patch } } })),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),

@@ -11,14 +11,19 @@ import { ConnectionsBar } from "./ConnectionsBar";
 
 export function ProjectView({ project }: { project: Project }) {
   const updateLayout = useStore((s) => s.updateLayout);
-  const stop = useStore((s) => s.stopSessions);
+  const stop = useStore((s) => s.stopSession);
   const addTerminal = useStore((s) => s.addTerminal);
   const changed = useStore((s) => s.gitSummary[project.path]?.files ?? 0);
   const openTasks = project.tasks.filter((t) => !t.done).length;
-  const [confirmStop, setConfirmStop] = useState(false);
+  const activeTerminal = project.terminals.find((t) => t.id === project.layout.activeTab);
+  const activeSession = useStore((s) => activeTerminal ? s.sessions[sessionId(project.id, activeTerminal.id)] : undefined);
+  const [confirmStop, setConfirmStop] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const confirming = !!activeTerminal && confirmStop === activeTerminal.id;
+  useEffect(() => setConfirmStop(null), [project.layout.activeTab]);
   useEffect(() => {
     if (!confirmStop) return;
-    const t = setTimeout(() => setConfirmStop(false), 3000);
+    const t = setTimeout(() => setConfirmStop(null), 3000);
     return () => clearTimeout(t);
   }, [confirmStop]);
   const branch = useStore((s) => s.gitSummary[project.path]?.branch ?? "");
@@ -29,7 +34,7 @@ export function ProjectView({ project }: { project: Project }) {
   const mainContent = (
     <div className="main-panel">
       <div className="tab-content">
-        {project.terminals.map((t) => (
+        {project.terminals.filter((t) => t.id === layout.activeTab).map((t) => (
           <div key={t.id} className="tab-pane" style={{ display: layout.activeTab === t.id ? "flex" : "none" }}>
             <TerminalPane project={project} tab={t} visible={layout.activeTab === t.id} />
           </div>
@@ -108,16 +113,19 @@ export function ProjectView({ project }: { project: Project }) {
             </button>
           )}
           <button
-            className={confirmStop ? "danger solid" : "danger"}
+            className={confirming ? "danger solid" : "danger"}
+            disabled={!activeTerminal || !activeSession?.alive || stopping}
             onClick={() => {
-              if (confirmStop) {
-                setConfirmStop(false);
-                void stop(project.id);
-              } else setConfirmStop(true);
+              if (!activeTerminal || stopping) return;
+              if (confirming) {
+                setConfirmStop(null);
+                setStopping(true);
+                void stop(project.id, activeTerminal.id).finally(() => setStopping(false));
+              } else setConfirmStop(activeTerminal.id);
             }}
-            title="Stop all terminals of this project (click twice)"
+            title={activeTerminal ? `Stop terminal "${activeTerminal.name}" (click twice)` : "Select a terminal to stop it"}
           >
-            {confirmStop ? "stop all? click again" : "stop"}
+            {stopping ? "stopping…" : confirming ? "stop this terminal?" : "stop terminal"}
           </button>
         </div>
       </header>

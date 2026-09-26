@@ -22,6 +22,7 @@ type Entry = {
   ready: boolean; // scrollback loaded; live output may be written directly
   queue: string[]; // base64 chunks received before ready
   lastSize: { cols: number; rows: number } | null;
+  loadGeneration: number;
 };
 
 const entries = new Map<string, Entry>();
@@ -57,12 +58,16 @@ function makeTerminal(): Terminal {
 }
 
 async function loadScrollback(id: string, e: Entry) {
+  const generation = ++e.loadGeneration;
+  const current = () => entries.get(id) === e && e.loadGeneration === generation;
   try {
     const data = await pty.scrollback(id);
+    if (!current()) return;
     if (data) e.term.write(b64decode(data));
   } catch {
     /* daemon may be down; live output will still arrive */
   }
+  if (!current()) return;
   e.ready = true;
   for (const chunk of e.queue) e.term.write(b64decode(chunk));
   e.queue = [];
@@ -71,7 +76,9 @@ async function loadScrollback(id: string, e: Entry) {
   const { cols, rows } = e.term;
   if (cols > 2 && rows > 1) {
     pty.resize(id, cols - 1, rows).catch(() => {});
-    setTimeout(() => pty.resize(id, cols, rows).catch(() => {}), 60);
+    setTimeout(() => {
+      if (current()) pty.resize(id, e.term.cols, e.term.rows).catch(() => {});
+    }, 60);
   }
 }
 
@@ -104,7 +111,7 @@ export const terminals = {
       const search = new SearchAddon();
       const el = document.createElement("div");
       el.className = "xterm-host";
-      e = { term, fit, search, webgl: null, el, opened: false, ready: false, queue: [], lastSize: null };
+      e = { term, fit, search, webgl: null, el, opened: false, ready: false, queue: [], lastSize: null, loadGeneration: 0 };
       entries.set(id, e);
       term.onData((data) => {
         terminalHooks.onInput(id);
@@ -154,6 +161,7 @@ export const terminals = {
   setVisible(id: string, visible: boolean) {
     const e = entries.get(id);
     if (!e || !e.opened) return;
+    e.term.options.cursorBlink = visible;
     if (visible) attachWebgl(e);
     else if (e.webgl) {
       e.webgl.dispose();
@@ -200,7 +208,7 @@ export const terminals = {
 
   handleOutput(id: string, data: string) {
     const e = entries.get(id);
-    if (!e) return; // not attached yet; scrollback will cover it on first attach
+    if (!e || !e.opened) return; // scrollback covers output before the first open
     if (e.ready) e.term.write(b64decode(data));
     else e.queue.push(data);
   },

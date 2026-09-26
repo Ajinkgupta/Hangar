@@ -5,6 +5,7 @@ pub mod daemon_client;
 pub mod files;
 pub mod git;
 pub mod monitor;
+pub mod tasks;
 
 use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
@@ -35,7 +36,7 @@ fn open_url(url: String) -> Result<(), String> {
     spawn_and_reap(c)
 }
 
-/// Opens a folder or file in the given editor app (e.g. "Cursor", "Visual Studio Code").
+/// Opens a folder or file in the selected editor app.
 #[tauri::command]
 fn open_in_editor(app_name: String, path: String) -> Result<(), String> {
     if !std::path::Path::new(&path).exists() {
@@ -46,10 +47,11 @@ fn open_in_editor(app_name: String, path: String) -> Result<(), String> {
     spawn_and_reap(c)
 }
 
-/// Editors found in /Applications, in preference order.
+/// Editors found in /Applications, in preference order. Agent harnesses belong
+/// in terminal commands rather than this editor integration list.
 #[tauri::command]
 fn detect_editors() -> Vec<String> {
-    ["Cursor", "Visual Studio Code", "Zed", "Windsurf", "Sublime Text"]
+    ["Visual Studio Code", "Zed", "Windsurf", "Sublime Text"]
         .iter()
         .filter(|n| std::path::Path::new(&format!("/Applications/{n}.app")).exists())
         .map(|n| n.to_string())
@@ -243,7 +245,11 @@ pub fn run() {
             git::git_worktree_add,
             files::fs_list,
             files::fs_read,
+            files::fs_write,
+            files::fs_create,
             files::fs_reveal,
+            tasks::tasks_apply,
+            tasks::tasks_cli_path,
             config::config_load,
             config::config_save,
             open_url,

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
-import { CHANGES_TAB, sessionId } from "../lib/types";
+import { CHANGES_TAB, FILES_TAB, TASKS_TAB, sessionId } from "../lib/types";
 import { terminals } from "../lib/terminals";
 
 type Item = { key: string; label: string; hint: string; run: () => void };
@@ -18,6 +18,7 @@ export function CommandPalette() {
   const connections = useStore((s) => s.config.connections);
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
 
   const items = useMemo<Item[]>(() => {
     const s = useStore.getState();
@@ -35,16 +36,16 @@ export function CommandPalette() {
           },
         });
       }
-      out.push({
-        key: `${p.id}:changes`,
-        label: `${p.name} › changes`,
-        hint: "git diff",
-        run: () => {
+      for (const [tab, label, hint] of [[FILES_TAB, "Files", "browse and edit files"], [CHANGES_TAB, "Changes", "git diff"], [TASKS_TAB, "Tasks", "shared agent checklist"]]) {
+        out.push({ key: `${p.id}:${tab}`, label: `${p.name} › ${label}`, hint, run: () => {
           s.setActive(p.id);
-          s.updateLayout(p.id, { activeTab: CHANGES_TAB });
-        },
-      });
-      out.push({ key: `${p.id}:new`, label: `${p.name} › new terminal`, hint: "⌘T", run: () => void s.addTerminal(p.id) });
+          s.updateLayout(p.id, { activeTab: tab });
+        } });
+      }
+      out.push({ key: `${p.id}:new`, label: `${p.name} › new terminal`, hint: "⌘T", run: () => {
+        s.setActive(p.id);
+        void s.addTerminal(p.id);
+      } });
     }
     for (const c of connections) {
       out.push({ key: `conn:${c.id}`, label: `ssh › ${c.name}`, hint: c.command, run: () => void s.runConnection(c.id) });
@@ -55,6 +56,10 @@ export function CommandPalette() {
   }, [projects, connections, q]);
 
   useEffect(() => setCursor(0), [q]);
+  const selected = Math.max(0, Math.min(cursor, items.length - 1));
+  useEffect(() => {
+    listRef.current?.children[selected]?.scrollIntoView({ block: "nearest" });
+  }, [selected, q]);
 
   const pick = (i: Item) => {
     i.run();
@@ -63,28 +68,32 @@ export function CommandPalette() {
 
   return (
     <div className="palette-backdrop" onClick={close}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Quick navigation" onClick={(e) => e.stopPropagation()}>
         <input
           autoFocus
-          placeholder="Jump to project or terminal…"
+          placeholder="Find projects, terminals, files, or tasks…"
+          role="combobox" aria-label="Search Hangar" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list"
+          aria-activedescendant={items.length ? `palette-result-${selected}` : undefined}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
+            if (e.key === "Tab") e.preventDefault();
             if (e.key === "Escape") close();
-            if (e.key === "ArrowDown") setCursor((c) => Math.min(items.length - 1, c + 1));
-            if (e.key === "ArrowUp") setCursor((c) => Math.max(0, c - 1));
-            if (e.key === "Enter" && items[cursor]) pick(items[cursor]);
+            if (e.key === "ArrowDown") { e.preventDefault(); setCursor(Math.min(Math.max(0, items.length - 1), selected + 1)); }
+            if (e.key === "ArrowUp") { e.preventDefault(); setCursor(Math.max(0, selected - 1)); }
+            if (e.key === "Enter" && items[selected]) pick(items[selected]);
           }}
         />
-        <ul>
-          {items.slice(0, 12).map((i, idx) => (
-            <li key={i.key} className={idx === cursor ? "selected" : ""} onMouseEnter={() => setCursor(idx)} onClick={() => pick(i)}>
+        <ul ref={listRef} id="palette-results" role="listbox">
+          {items.map((i, idx) => (
+            <li key={i.key} id={`palette-result-${idx}`} role="option" aria-selected={idx === selected} className={idx === selected ? "selected" : ""} onMouseEnter={() => setCursor(idx)} onClick={() => pick(i)}>
               <span className="label">{i.label}</span>
               <span className="hint">{i.hint}</span>
             </li>
           ))}
-          {items.length === 0 && <li className="muted">No matches</li>}
+          {items.length === 0 && <li className="muted">No matches. Try a project name or “tasks”.</li>}
         </ul>
+        <div className="palette-footer"><span>{items.length} results</span><span><kbd>↑</kbd> <kbd>↓</kbd> navigate · <kbd>↵</kbd> open · <kbd>esc</kbd> close</span></div>
       </div>
     </div>
   );

@@ -1,20 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { deriveStatus, projectPort } from "../lib/status";
-import { CHANGES_TAB, sessionId, type Project } from "../lib/types";
+import { sessionId, type Project } from "../lib/types";
+import { pollWhileVisible } from "../lib/polling";
+import { AddProjectButton } from "./AddProject";
 import { openUrl, pty } from "../lib/ipc";
 
 /** Every project at a glance: status, agent, ports, changes, and the tail of its terminal. */
 export function Overview() {
   const projects = useStore(useShallow((s) => s.config.projects.filter((p) => p.kind !== "ssh")));
+  const sessions = useStore((s) => s.sessions);
+  const attention = useStore((s) => s.attention);
+  const monitor = useStore((s) => s.monitor);
+  const statuses = projects.map((p) => deriveStatus(p.id, sessions, monitor, attention));
   return (
     <div className="overview">
       <header className="overview-header">
-        <h2>Overview</h2>
-        <span className="hint">{projects.length} projects · click a card to open it · ⌘0 toggles</span>
+        <div><h2>Workspace overview</h2><p className="hint">Your projects, coding agents, and running terminals in one place.</p></div>
+        <span className="spacer" /><span className="hint"><kbd>⌘0</kbd> switch view</span>
       </header>
-      {projects.length === 0 && <div className="muted pad">No projects yet.</div>}
+      {projects.length > 0 ? <div className="overview-stats">
+        <div><strong>{projects.length}</strong><span>Projects</span></div>
+        <div className="attention"><strong>{statuses.filter((s) => s === "attention").length}</strong><span>Need attention</span></div>
+        <div><strong>{statuses.filter((s) => s === "running").length}</strong><span>Running</span></div>
+        <div><strong>{statuses.filter((s) => s === "error").length}</strong><span>With ended terminals</span></div>
+      </div> : <div className="empty"><h2>Your workspace starts here</h2><p>Add a project to keep your agents, files, and terminals together.</p><AddProjectButton large /></div>}
       <div className="overview-grid">
         {projects.map((p) => (
           <ProjectCard key={p.id} project={p} />
@@ -34,39 +45,42 @@ function ProjectCard({ project }: { project: Project }) {
     (x) => x.split("=") as [string, string],
   );
   const attention = useStore(useShallow((s) => Object.keys(s.attention).filter((sid) => sid.startsWith(project.id + ":"))));
-  const lastOutput = useStore((s) => s.lastOutput);
   const [tail, setTail] = useState<string[]>([]);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [inView, setInView] = useState(false);
+  const connected = useStore((s) => s.daemonConnected);
+  const lastPreview = useRef<{ sid: string; stamp: number | undefined } | null>(null);
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting));
+    if (cardRef.current) observer.observe(cardRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   // The terminal worth watching: one needing attention, else one running an agent,
   // else the active tab, else the first.
   const focusTerminalId =
     attention[0]?.split(":")[1] ??
     agents[0]?.[0].split(":")[1] ??
-    (project.layout.activeTab !== CHANGES_TAB ? project.layout.activeTab : project.terminals[0]?.id);
+    (project.terminals.find((t) => t.id === project.layout.activeTab)?.id ?? project.terminals[0]?.id);
   const focusTab = project.terminals.find((t) => t.id === focusTerminalId);
   const focusSid = focusTab ? sessionId(project.id, focusTab.id) : null;
-  const streaming = focusSid ? Date.now() - (lastOutput[focusSid] ?? 0) < 3000 : false;
+  const lastOutput = useStore((s) => focusSid ? s.lastOutput[focusSid] : undefined);
+  const streaming = lastOutput ? Date.now() - lastOutput < 3000 : false;
 
+  useEffect(() => { setTail([]); lastPreview.current = null; }, [focusSid, connected]);
   useEffect(() => {
-    if (!focusSid) return;
+    if (!focusSid || !inView || !connected) return;
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
+    const cancel = pollWhileVisible(async () => {
+      const stamp = useStore.getState().lastOutput[focusSid];
+      if (lastPreview.current?.sid === focusSid && lastPreview.current.stamp === stamp) return;
+      const lines = await pty.tail(focusSid, 7);
       if (stopped) return;
-      if (document.visibilityState !== "visible") {
-        timer = setTimeout(tick, 3000);
-        return;
-      }
-      const lines = await pty.tail(focusSid, 7).catch(() => [] as string[]);
-      if (!stopped) setTail(lines);
-      timer = setTimeout(tick, 3000);
-    };
-    void tick();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [focusSid]);
+      lastPreview.current = { sid: focusSid, stamp };
+      setTail((previous) => previous.length === lines.length && previous.every((line, i) => line === lines[i]) ? previous : lines);
+    }, () => 3000);
+    return () => { stopped = true; cancel(); };
+  }, [focusSid, inView, connected]);
 
   const openIt = () => {
     setActive(project.id);
@@ -74,24 +88,27 @@ function ProjectCard({ project }: { project: Project }) {
   };
 
   return (
-    <div className={"card " + status} onClick={openIt}>
+    <div ref={cardRef} className={"card " + status}>
+      <button className="card-open" onClick={openIt} aria-label={`Open ${project.name}`} />
       <div className="card-head">
         <span className={"dot " + status} />
         <span className="card-name">{project.name}</span>
         {summary?.branch && <span className="meta branch">{summary.branch}</span>}
         <span className="spacer" />
         {port !== null && (
-          <span
+          <button
             className="port-badge"
+            aria-label={`Open localhost port ${port}`}
             onClick={(e) => {
               e.stopPropagation();
               void openUrl(`http://localhost:${port}`);
             }}
           >
             :{port}
-          </span>
+          </button>
         )}
       </div>
+      <div className="card-path" title={project.path}>{project.path}</div>
       <div className="card-meta">
         {status === "attention" && <span className="meta attention">needs you</span>}
         {agents.map(([sid, a]) => (
@@ -99,7 +116,7 @@ function ProjectCard({ project }: { project: Project }) {
             {a} · {project.terminals.find((t) => t.id === sid.split(":")[1])?.name ?? "terminal"}
           </span>
         ))}
-        {agents.length === 0 && status !== "attention" && <span className="meta">{status === "running" ? "running" : "idle"}</span>}
+        {agents.length === 0 && status !== "attention" && <span className="meta">{status === "running" ? "running" : status === "error" ? "terminal ended" : "idle"}</span>}
         {summary?.is_repo && summary.files > 0 && (
           <span className="meta changes">
             {summary.files} files <span className="add">+{summary.additions}</span> <span className="del">−{summary.deletions}</span>

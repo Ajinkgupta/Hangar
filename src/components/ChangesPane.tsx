@@ -4,6 +4,7 @@ import { git, openInEditor, type FileStatus, type GitStatus } from "../lib/ipc";
 import { parseUnifiedDiff } from "../lib/diff";
 import type { Project } from "../lib/types";
 import { DiffView } from "./DiffView";
+import { pollWhileVisible } from "../lib/polling";
 
 const STATUS_LABEL: Record<string, string> = { M: "modified", A: "added", D: "deleted", R: "renamed", C: "copied", U: "conflict", "?": "untracked" };
 
@@ -17,30 +18,18 @@ export function ChangesPane({ project }: { project: Project }) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, string>>({});
+  const [diffErrors, setDiffErrors] = useState<Record<string, string | undefined>>({});
   const [loading, setLoading] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   // Poll status every 5s while mounted (git status on a big repo is not free).
   useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      if (stopped) return;
-      if (document.visibilityState !== "visible") {
-        timer = setTimeout(tick, 5000);
-        return;
-      }
+    const stop = pollWhileVisible(async () => {
       const s = await git.status(project.path).catch((e) => ({ is_repo: true, files: [], error: String(e) }) as GitStatus);
-      if (stopped) return;
       setStatus((prev) => (JSON.stringify(prev) === JSON.stringify(s) ? prev : s));
       setTick((n) => n + 1);
-      timer = setTimeout(tick, 5000);
-    };
-    void tick();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
+    }, () => 5000, document, (e) => setStatus({ is_repo: true, files: [], error: String(e) }));
+    return stop;
   }, [project.path]);
 
   const files = status?.files ?? [];
@@ -60,10 +49,13 @@ export function ChangesPane({ project }: { project: Project }) {
     git
       .diff(project.path, current.path, current.status === "?", current.old_path)
       .then((d) => {
-        if (!cancelled) setDiffs((prev) => ({ ...prev, [current.path]: d }));
+        if (!cancelled) {
+          setDiffs((prev) => ({ ...prev, [current.path]: d }));
+          setDiffErrors((prev) => ({ ...prev, [current.path]: undefined }));
+        }
       })
       .catch((e) => {
-        if (!cancelled) setDiffs((prev) => ({ ...prev, [current.path]: `\\ error: ${e}` }));
+        if (!cancelled) setDiffErrors((prev) => ({ ...prev, [current.path]: String(e) }));
       })
       .finally(() => {
         if (!cancelled) setLoading(null);
@@ -75,6 +67,7 @@ export function ChangesPane({ project }: { project: Project }) {
 
   const parsed = useMemo(() => (current && diffs[current.path] !== undefined ? parseUnifiedDiff(diffs[current.path]) : null), [current, diffs]);
 
+  if (status?.error) return <div className="changes-empty error-text">Could not load changes: {status.error}</div>;
   if (status && !status.is_repo) return <div className="changes-empty">Not a git repository.</div>;
 
   return (
@@ -115,8 +108,9 @@ export function ChangesPane({ project }: { project: Project }) {
             </div>
           </div>
         )}
-        {current && parsed && <DiffView diff={parsed} mode={view} />}
-        {current && !parsed && loading && <div className="muted pad">Loading diff…</div>}
+        {current && diffErrors[current.path] && <div className="error-text pad">Could not load diff: {diffErrors[current.path]}</div>}
+        {current && !diffErrors[current.path] && parsed && <DiffView diff={parsed} mode={view} />}
+        {current && !diffErrors[current.path] && !parsed && loading && <div className="muted pad">Loading diff…</div>}
         {!current && <div className="muted pad">Select a file to see its diff.</div>}
       </div>
     </div>

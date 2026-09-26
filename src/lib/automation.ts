@@ -22,6 +22,7 @@ const BUFFER_KEEP = 4000;
 export const automation = {
   /** Starts (or replaces) the script for a session. Secrets must already be resolved. */
   start(sessionId: string, steps: Array<ConnectionStep & { resolved: string }>, hooks: Pick<Script, "onStep" | "onDone"> = {}) {
+    automation.stop(sessionId);
     const compiled = steps
       .filter((s) => s.expect.trim())
       .map((s) => {
@@ -37,7 +38,6 @@ export const automation = {
       hooks.onDone?.();
       return;
     }
-    automation.stop(sessionId);
     const script: Script = { steps: compiled, index: 0, buffer: "", startedAt: Date.now(), timer: null, ...hooks };
     scripts.set(sessionId, script);
     arm(sessionId, script);

@@ -168,7 +168,8 @@ export function normalizeConfig(raw: unknown): Config {
                 return { id, name: typeof t.name === "string" && t.name ? t.name : "terminal" };
               })
           : [];
-        const terminals: TerminalTab[] = rawTerminals.length ? rawTerminals : [{ id: uid().slice(0, 8), name: "main" }];
+        const kind = p.kind === "ssh" || p.id === SSH_PROJECT_ID ? ("ssh" as const) : undefined;
+        const terminals: TerminalTab[] = rawTerminals.length || kind ? rawTerminals : [{ id: uid().slice(0, 8), name: "main" }];
         const raw = (p.layout || {}) as Partial<ProjectLayout>;
         const layout: ProjectLayout = {
           ...defaultLayout(),
@@ -176,16 +177,15 @@ export function normalizeConfig(raw: unknown): Config {
           ...(raw.diffView === "split" || raw.diffView === "unified" ? { diffView: raw.diffView } : {}),
           ...(typeof raw.portsOpen === "boolean" ? { portsOpen: raw.portsOpen } : {}),
         };
-        if (!SPECIAL_TABS.includes(layout.activeTab) && !terminals.some((t) => t.id === layout.activeTab)) {
+        if (!(kind ? [] : SPECIAL_TABS).includes(layout.activeTab) && !terminals.some((t) => t.id === layout.activeTab)) {
           layout.activeTab = terminals[0]?.id ?? "";
         }
-        const kind = p.kind === "ssh" || p.id === SSH_PROJECT_ID ? ("ssh" as const) : undefined;
         return {
           id: p.id || uid(),
           name: p.name || basename(p.path),
           path: p.path,
           ...(kind ? { kind } : {}),
-          terminals: kind ? (Array.isArray(p.terminals) ? p.terminals : []) : terminals,
+          terminals,
           commands: Array.isArray(p.commands)
             ? p.commands.filter((c) => c && typeof c.command === "string").map((c) => ({ ...c, id: c.id || uid(), label: c.label || c.command }))
             : kind

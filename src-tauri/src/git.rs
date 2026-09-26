@@ -64,6 +64,7 @@ fn git_bin() -> &'static str {
 
 fn git(cwd: &str, args: &[&str]) -> Result<std::process::Output, String> {
     Command::new(git_bin())
+        .arg("--literal-pathspecs")
         .arg("-C")
         .arg(cwd)
         .arg("-c")
@@ -71,6 +72,19 @@ fn git(cwd: &str, args: &[&str]) -> Result<std::process::Output, String> {
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))
+}
+
+// A newly initialized repository has no HEAD yet. Comparing with its empty tree
+// still includes staged files and subsequent working-tree edits.
+fn diff_base(path: &str) -> Result<String, String> {
+    if git(path, &["rev-parse", "--verify", "HEAD"])?.status.success() {
+        return Ok("HEAD".into());
+    }
+    let out = git(path, &["hash-object", "-t", "tree", "--stdin"])?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 #[tauri::command]
@@ -102,7 +116,8 @@ pub async fn git_diff(path: String, file: String, untracked: bool, old_path: Opt
         let out = if untracked {
             git(&path, &["diff", "--no-color", "--no-index", "--", "/dev/null", &file])?
         } else {
-            let mut args = vec!["diff", "--no-color", "-M", "HEAD", "--"];
+            let base = diff_base(&path)?;
+            let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", &base, "--"];
             if let Some(op) = old_path.as_deref() {
                 args.push(op);
             }
@@ -137,10 +152,17 @@ fn summary_one(path: &str) -> GitSummary {
     }
     s.is_repo = true;
     s.files = parse_porcelain_z(&st.stdout).len() as u32;
-    if let Ok(b) = git(path, &["rev-parse", "--abbrev-ref", "HEAD"]) {
-        s.branch = String::from_utf8_lossy(&b.stdout).trim().to_string();
+    if let Ok(b) = git(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        if b.status.success() {
+            s.branch = String::from_utf8_lossy(&b.stdout).trim().to_string();
+        } else if let Ok(head) = git(path, &["rev-parse", "--short", "HEAD"]) {
+            if head.status.success() {
+                s.branch = String::from_utf8_lossy(&head.stdout).trim().to_string();
+            }
+        }
     }
-    if let Ok(d) = git(path, &["diff", "--numstat", "HEAD"]) {
+    let base = diff_base(path).unwrap_or_else(|_| "HEAD".into());
+    if let Ok(d) = git(path, &["diff", "--numstat", &base]) {
         for line in String::from_utf8_lossy(&d.stdout).lines() {
             let mut it = line.split('\t');
             if let (Some(a), Some(r)) = (it.next(), it.next()) {
@@ -201,6 +223,37 @@ pub async fn git_worktree_add(path: String, branch: String) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestRepo(std::path::PathBuf);
+    impl TestRepo {
+        fn new() -> Self {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let dir = std::env::temp_dir().join(format!("hangar-git-{}-{stamp}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            assert!(git(dir.to_str().unwrap(), &["init", "-q", "-b", "main"]).unwrap().status.success());
+            Self(dir)
+        }
+        fn path(&self) -> &str { self.0.to_str().unwrap() }
+    }
+    impl Drop for TestRepo {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    #[tokio::test]
+    async fn diffs_before_first_commit_include_working_tree_edits_and_literal_paths() {
+        let repo = TestRepo::new();
+        std::fs::write(repo.0.join("[draft].txt"), "staged\n").unwrap();
+        std::fs::write(repo.0.join("d.txt"), "unrelated\n").unwrap();
+        assert!(git(repo.path(), &["add", "."]).unwrap().status.success());
+        std::fs::write(repo.0.join("[draft].txt"), "latest\nsecond line\n").unwrap();
+        let diff = git_diff(repo.path().into(), "[draft].txt".into(), false, None).await.unwrap();
+        assert!(diff.contains("+latest\n+second line"), "{diff}");
+        assert!(!diff.contains("unrelated"), "{diff}");
+        let summary = summary_one(repo.path());
+        assert_eq!(summary.branch, "main");
+        assert_eq!(summary.additions, 3);
+        assert_eq!(summary.deletions, 0);
+    }
 
     #[test]
     fn parses_modified_added_untracked_and_rename() {

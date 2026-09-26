@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Task } from "./types";
 
 export type SessionInfo = { id: string; cwd: string; pid: number; alive: boolean; exit_code: number | null };
 export type PortRow = {
@@ -39,7 +40,14 @@ export type FileContent = { path: string; content: string; size: number; truncat
 export const fs = {
   list: (root: string, dir: string) => invoke<FsEntry[]>("fs_list", { root, dir }),
   read: (root: string, path: string) => invoke<FileContent>("fs_read", { root, path }),
+  write: (root: string, path: string, expected: string, content: string) => invoke<void>("fs_write", { root, path, expected, content }),
+  create: (root: string, path: string, directory: boolean) => invoke<string>("fs_create", { root, path, directory }),
   reveal: (path: string) => invoke<void>("fs_reveal", { path }),
+};
+export type TaskAction = { op: "list" | "clear_done" } | { op: "add"; text: string } | { op: "update"; id: string; text?: string; done?: boolean } | { op: "delete"; id: string };
+export const tasks = {
+  apply: (root: string, action: TaskAction) => invoke<Task[]>("tasks_apply", { root, action }),
+  cliPath: () => invoke<string>("tasks_cli_path"),
 };
 export const daemonRestart = () => invoke<void>("daemon_restart");
 export const openUrl = (url: string) => invoke<void>("open_url", { url });

@@ -31,4 +31,17 @@ describe("automation", () => {
     automation.feed("nope", enc("password:"));
     expect(stripAnsi("\x1b[32mok\x1b[0m")).toBe("ok");
   });
+
+  it("cancels the previous script when replaced with no steps", () => {
+    const oldDone = vi.fn();
+    const done = vi.fn();
+    automation.start("replace", [{ expect: "password:", send: "", resolved: "old-secret" }], { onDone: oldDone });
+    automation.start("replace", [], { onDone: done });
+    const before = writes.length;
+    automation.feed("replace", enc("password:"));
+    expect(writes).toHaveLength(before);
+    expect(automation.isRunning("replace")).toBe(false);
+    expect(oldDone).not.toHaveBeenCalled();
+    expect(done).toHaveBeenCalledOnce();
+  });
 });

@@ -54,15 +54,21 @@ export function TerminalPane({ project, tab, visible }: { project: Project; tab:
     if (document.hasFocus()) clearAttention(id);
     const onFocus = () => clearAttention(id);
     window.addEventListener("focus", onFocus);
+    const onVisibility = () => {
+      const shown = document.visibilityState === "visible";
+      if (shown) terminals.open(id);
+      terminals.setVisible(id, shown);
+      if (shown) terminals.fit(id);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     const raf = requestAnimationFrame(() => {
-      terminals.open(id);
-      terminals.setVisible(id, true);
-      terminals.fit(id);
-      terminals.focus(id);
+      onVisibility();
+      if (document.visibilityState === "visible") terminals.focus(id);
     });
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
       terminals.setVisible(id, false); // also on unmount (project switch)
     };
   }, [visible, id, clearAttention]);

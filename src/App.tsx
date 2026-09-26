@@ -1,4 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { pollWhileVisible } from "./lib/polling";
+import { WorkspaceBar } from "./components/WorkspaceBar";
 import { Sidebar } from "./components/Sidebar";
 import { ProjectView } from "./components/ProjectView";
 import { EmptyState } from "./components/EmptyState";
@@ -12,7 +14,7 @@ import { applyThemeVars, themeByName } from "./lib/themes";
 import { selectActiveProject, useStore } from "./store";
 import { daemonRestart, daemonStatus, detectEditors, git, monitorTick, notify, on, traySetStatus } from "./lib/ipc";
 import { terminalHooks, terminals } from "./lib/terminals";
-import { CHANGES_TAB, SPECIAL_TABS, projectOfSession } from "./lib/types";
+import { SPECIAL_TABS, projectOfSession } from "./lib/types";
 
 export default function App() {
   const loaded = useStore((s) => s.loaded);
@@ -21,13 +23,14 @@ export default function App() {
   const lastError = useStore((s) => s.lastError);
   const active = useStore(selectActiveProject);
   const view = useStore((s) => s.view);
-  const projectCount = useStore((s) => s.config.projects.length);
+  const projectCount = useStore((s) => s.config.projects.filter((p) => p.kind !== "ssh").length);
   const paletteOpen = useStore((s) => s.paletteOpen);
   const worktreeFor = useStore((s) => s.worktreeFor);
   const connectionEditor = useStore((s) => s.connectionEditor);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const settings = useStore((s) => s.config.settings);
   const bootedRef = useRef(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Apply theme + terminal appearance whenever settings change.
   useEffect(() => {
@@ -86,46 +89,33 @@ export default function App() {
   // on screen, 8s otherwise (status dots / port badges), paused while hidden.
   useEffect(() => {
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    let n = 0;
-    const interval = () => {
+    let lastGit = 0;
+    const cancel = pollWhileVisible(async () => {
       const s = useStore.getState();
-      const a = s.config.projects.find((p) => p.id === s.config.activeProjectId);
-      return a?.layout.portsOpen || s.view === "overview" ? 2000 : 8000;
-    };
-    const tick = async () => {
-      if (stopped) return;
-      if (document.visibilityState === "visible") {
-        const s = useStore.getState();
-        const pids: Record<string, number> = {};
-        for (const [sid, sess] of Object.entries(s.sessions)) {
-          if (sess.alive && sess.pid) pids[sid] = sess.pid;
-        }
-        try {
-          s.setMonitor(await monitorTick(pids));
-        } catch (e) {
-          s.setMonitor({ ...s.monitor, error: String(e) });
-        }
-        // Git badges: every ~15s.
-        if (n++ % 4 === 0 && s.config.projects.length) {
-          git.summary(s.config.projects.map((p) => p.path)).then((r) => useStore.getState().setGitSummary(r)).catch(() => {});
+      if (!s.loaded) return;
+      const pids = Object.fromEntries(Object.entries(s.sessions).filter(([, session]) => session.alive && session.pid).map(([id, session]) => [id, session.pid]));
+      try {
+        const snapshot = await monitorTick(pids);
+        if (stopped) return;
+        s.setMonitor(snapshot);
+      } catch (e) {
+        if (stopped) return;
+        s.setMonitor({ ...useStore.getState().monitor, error: String(e) });
+      }
+      if (document.visibilityState === "visible" && Date.now() - lastGit >= 15_000) {
+        lastGit = Date.now();
+        const paths = [...new Set(useStore.getState().config.projects.filter((p) => p.kind !== "ssh").map((p) => p.path))];
+        if (paths.length) {
+          const summaries = await git.summary(paths).catch(() => null);
+          if (!stopped && summaries) useStore.getState().setGitSummary(summaries);
         }
       }
-      timer = setTimeout(tick, interval());
-    };
-    const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        clearTimeout(timer);
-        void tick();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    void tick();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
+    }, () => {
+      const s = useStore.getState();
+      const active = s.config.projects.find((p) => p.id === s.config.activeProjectId);
+      return s.view === "overview" || (s.view === "project" && active?.kind !== "ssh" && active?.layout.portsOpen) ? 2000 : 8000;
+    });
+    return () => { stopped = true; cancel(); };
   }, []);
 
   // Menu-bar count: agents waiting / running.
@@ -158,6 +148,11 @@ export default function App() {
         s.setPaletteOpen(!s.paletteOpen);
         return;
       }
+      if (key === "b" && !e.shiftKey && !s.paletteOpen && !s.worktreeFor && !s.connectionEditor && !s.settingsOpen) {
+        e.preventDefault();
+        setSidebarOpen((open) => !open);
+        return;
+      }
       // While a dialog is open, or typing in a text field, only the two toggles above apply.
       if (s.paletteOpen || s.worktreeFor || s.connectionEditor || s.settingsOpen) return;
       const target = e.target as HTMLElement | null;
@@ -183,13 +178,13 @@ export default function App() {
         void s.addTerminal(project.id);
       } else if (key === "w" && !e.shiftKey) {
         e.preventDefault();
-        if (project.layout.activeTab !== CHANGES_TAB && project.terminals.length > 1) {
+        if (project.terminals.some((t) => t.id === project.layout.activeTab) && project.terminals.length > 1) {
           void s.closeTerminal(project.id, project.layout.activeTab);
         }
-      } else if (e.shiftKey && (key === "]" || key === "}")) {
+      } else if (tabs.length && e.shiftKey && (key === "]" || key === "}")) {
         e.preventDefault();
         s.updateLayout(project.id, { activeTab: tabs[(idx + 1) % tabs.length] });
-      } else if (e.shiftKey && (key === "[" || key === "{")) {
+      } else if (tabs.length && e.shiftKey && (key === "[" || key === "{")) {
         e.preventDefault();
         s.updateLayout(project.id, { activeTab: tabs[(idx - 1 + tabs.length) % tabs.length] });
       }
@@ -213,8 +208,9 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar />
+      {sidebarOpen && <Sidebar />}
       <main className="main">
+        <WorkspaceBar sidebarOpen={sidebarOpen} toggleSidebar={() => setSidebarOpen((open) => !open)} />
         {!daemonConnected && <div className="banner warn">Reconnecting to session daemon…</div>}
         {daemonConnected && daemonStale && (
           <div className="banner warn">
@@ -248,7 +244,7 @@ export default function App() {
 
 const lastNotified: Record<string, number> = {};
 
-/** A terminal rang its bell (Claude Code / cursor-agent do this when they finish or need
+/** A terminal rang its bell (coding agents do this when they finish or need
  *  permission). If the user isn't looking at that terminal, flag it and notify. */
 function onBell(sid: string) {
   const s = useStore.getState();

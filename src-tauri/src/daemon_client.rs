@@ -62,10 +62,17 @@ pub struct DaemonStatus {
     pub build: Option<String>,
 }
 
-fn pid_alive(data_dir: &Path) -> bool {
-    let Ok(s) = std::fs::read_to_string(data_dir.join("hangard.pid")) else { return false };
-    let Ok(pid) = s.trim().parse::<i32>() else { return false };
-    pid > 1 && unsafe { libc::kill(pid, 0) } == 0
+/// True while some daemon holds its exclusive `hangard.lock`. The kernel drops the lock
+/// when that process dies, so unlike the pid file this can't be fooled by a pid reused
+/// after a reboot.
+fn daemon_running(data_dir: &Path) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let Ok(f) = std::fs::File::open(data_dir.join("hangard.lock")) else { return false };
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
+        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+        return false;
+    }
+    true
 }
 
 fn spawn_daemon(data_dir: &Path) -> anyhow::Result<()> {
@@ -101,7 +108,7 @@ async fn connect_or_spawn(state: &DaemonState, data_dir: &Path) -> anyhow::Resul
     // already running from another Hangar instance: never delete its socket, and never
     // spawn twice within a short window.
     let recently = state.last_spawn.lock().unwrap().map(|t| t.elapsed() < Duration::from_secs(20)).unwrap_or(false);
-    if !recently && !pid_alive(data_dir) {
+    if !recently && !daemon_running(data_dir) {
         *state.last_spawn.lock().unwrap() = Some(Instant::now());
         spawn_daemon(data_dir)?;
     }
@@ -354,4 +361,41 @@ pub async fn pty_kill(state: State<'_, DaemonState>, id: String) -> Result<(), S
 #[tauri::command]
 pub async fn pty_forget(state: State<'_, DaemonState>, id: String) -> Result<(), String> {
     state.request(Cmd::Forget { id }).await.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::daemon_running;
+    use std::os::unix::io::AsRawFd;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("hangar-dc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn stale_pid_file_of_reused_pid_is_not_a_running_daemon() {
+        // After a reboot the pid file can name an unrelated live process (pid 1 always exists).
+        let d = temp_dir("stale");
+        std::fs::write(d.join("hangard.pid"), "1").unwrap();
+        std::fs::write(d.join("hangard.lock"), "").unwrap();
+        assert!(!daemon_running(&d));
+    }
+
+    #[test]
+    fn held_lock_means_daemon_running() {
+        let d = temp_dir("held");
+        let f = std::fs::OpenOptions::new().create(true).write(true).open(d.join("hangard.lock")).unwrap();
+        assert_eq!(unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0);
+        assert!(daemon_running(&d));
+        drop(f);
+        assert!(!daemon_running(&d));
+    }
+
+    #[test]
+    fn missing_lock_file_means_not_running() {
+        assert!(!daemon_running(&temp_dir("missing")));
+    }
 }
